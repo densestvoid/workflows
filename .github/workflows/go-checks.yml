@@ -25,11 +25,11 @@ jobs:
   Vet:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-go@v5
+    - name: Setup
+      uses: ./.github/workflows/go-checks.yml@setup
       with:
         go-version: ${{ inputs.go-version }}
-        check-latest: true
+        working-directory: ${{ inputs.working-directory }}
         
     - name: Vet
       run: go vet ./...
@@ -38,11 +38,11 @@ jobs:
   Static-Analysis:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-go@v5
+    - name: Setup
+      uses: ./.github/workflows/go-checks.yml@setup
       with:
         go-version: ${{ inputs.go-version }}
-        check-latest: true
+        working-directory: ${{ inputs.working-directory }}
 
     - name: Install tools
       run: go install honnef.co/go/tools/cmd/staticcheck@latest
@@ -54,11 +54,11 @@ jobs:
   Lint:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-go@v5
+    - name: Setup
+      uses: ./.github/workflows/go-checks.yml@setup
       with:
         go-version: ${{ inputs.go-version }}
-        check-latest: true
+        working-directory: ${{ inputs.working-directory }}
 
     - name: Install tools
       run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
@@ -70,11 +70,11 @@ jobs:
   Vulnerability-Check:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-go@v5
+    - name: Setup
+      uses: ./.github/workflows/go-checks.yml@setup
       with:
         go-version: ${{ inputs.go-version }}
-        check-latest: true
+        working-directory: ${{ inputs.working-directory }}
 
     - name: Install tools
       run: go install golang.org/x/vuln/cmd/govulncheck@latest
@@ -86,11 +86,11 @@ jobs:
   Security-Check:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v4
-    - uses: actions/setup-go@v5
+    - name: Setup
+      uses: ./.github/workflows/go-checks.yml@setup
       with:
         go-version: ${{ inputs.go-version }}
-        check-latest: true
+        working-directory: ${{ inputs.working-directory }}
 
     - name: Install tools
       run: go install github.com/securego/gosec/v2/cmd/gosec@latest
@@ -98,3 +98,28 @@ jobs:
     - name: Security check
       run: gosec ./...
       working-directory: ${{ inputs.working-directory }}
+
+# Composite action definition
+setup:
+  name: 'Setup Go Environment'
+  description: 'Setup Go environment with checkout and Go installation'
+  inputs:
+    go-version:
+      description: 'Go version to use'
+      required: false
+      default: 'stable'
+    working-directory:
+      description: 'Working directory for the Go project'
+      required: false
+      default: '.'
+  runs:
+    using: 'composite'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+          check-latest: true
