@@ -4,6 +4,7 @@
 name: Go Checks
 
 on:
+  pull_request:
   workflow_call:
     inputs:
       go-version:
@@ -21,6 +22,10 @@ on:
         description: 'GitHub token for accessing private repositories'
         required: false
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   Vet:
     runs-on: ubuntu-latest
@@ -31,6 +36,7 @@ jobs:
     - name: Vet
       run: go vet ./...
       working-directory: ${{ inputs.working-directory }}
+      continue-on-error: false
       
   Static-Analysis:
     runs-on: ubuntu-latest
@@ -38,12 +44,15 @@ jobs:
     - name: Setup
       uses: ./.github/workflows/go-checks.yml@setup
 
-    - name: Install tools
-      run: go install honnef.co/go/tools/cmd/staticcheck@latest
+    - name: Install staticcheck
+      uses: ./.github/workflows/go-checks.yml@install-tool
+      with:
+        tool-package: honnef.co/go/tools/cmd/staticcheck
 
     - name: Static analysis
       run: staticcheck ./...
       working-directory: ${{ inputs.working-directory }}
+      continue-on-error: false
 
   Lint:
     runs-on: ubuntu-latest
@@ -51,12 +60,15 @@ jobs:
     - name: Setup
       uses: ./.github/workflows/go-checks.yml@setup
 
-    - name: Install tools
-      run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+    - name: Install golangci-lint
+      uses: ./.github/workflows/go-checks.yml@install-tool
+      with:
+        tool-package: github.com/golangci/golangci-lint/cmd/golangci-lint
 
     - name: Lint
       run: golangci-lint run ./...
       working-directory: ${{ inputs.working-directory }}
+      continue-on-error: false
 
   Vulnerability-Check:
     runs-on: ubuntu-latest
@@ -64,12 +76,15 @@ jobs:
     - name: Setup
       uses: ./.github/workflows/go-checks.yml@setup
 
-    - name: Install tools
-      run: go install golang.org/x/vuln/cmd/govulncheck@latest
+    - name: Install govulncheck
+      uses: ./.github/workflows/go-checks.yml@install-tool
+      with:
+        tool-package: golang.org/x/vuln/cmd/govulncheck
 
     - name: Vulnerability check
       run: govulncheck ./...
       working-directory: ${{ inputs.working-directory }}
+      continue-on-error: false
 
   Security-Check:
     runs-on: ubuntu-latest
@@ -77,14 +92,17 @@ jobs:
     - name: Setup
       uses: ./.github/workflows/go-checks.yml@setup
 
-    - name: Install tools
-      run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+    - name: Install gosec
+      uses: ./.github/workflows/go-checks.yml@install-tool
+      with:
+        tool-package: github.com/securego/gosec/v2/cmd/gosec
 
     - name: Security check
       run: gosec ./...
       working-directory: ${{ inputs.working-directory }}
+      continue-on-error: false
 
-# Composite action definition
+# Composite action definitions
 setup:
   name: 'Setup Go Environment'
   description: 'Setup Go environment with checkout and Go installation'
@@ -99,3 +117,32 @@ setup:
         with:
           go-version: ${{ inputs.go-version }}
           check-latest: true
+
+install-tool:
+  name: 'Install and Cache Go Tool'
+  description: 'Install and cache a Go tool, ensuring latest version'
+  inputs:
+    tool-package:
+      description: 'Go package path for the tool'
+      required: true
+  runs:
+    using: 'composite'
+    steps:
+      - name: Cache tool
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/${{ inputs.tool-package }}
+          key: ${{ inputs.tool-package }}-${{ runner.os }}-latest
+          restore-keys: |
+            ${{ inputs.tool-package }}-${{ runner.os }}-
+
+      - name: Install tool
+        shell: bash
+        run: |
+          TOOL_NAME=$(basename "${{ inputs.tool-package }}")
+          if [ ! -f ~/go/bin/$TOOL_NAME ]; then
+            go install ${{ inputs.tool-package }}@latest
+          else
+            # Update to latest version
+            go install ${{ inputs.tool-package }}@latest
+          fi
