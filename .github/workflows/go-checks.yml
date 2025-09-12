@@ -47,7 +47,6 @@ jobs:
     - name: Install staticcheck
       uses: ./.github/workflows/go-checks.yml@install-tool
       with:
-        tool-name: staticcheck
         tool-package: honnef.co/go/tools/cmd/staticcheck
 
     - name: Static analysis
@@ -64,7 +63,6 @@ jobs:
     - name: Install golangci-lint
       uses: ./.github/workflows/go-checks.yml@install-tool
       with:
-        tool-name: golangci-lint
         tool-package: github.com/golangci/golangci-lint/cmd/golangci-lint
 
     - name: Lint
@@ -81,7 +79,6 @@ jobs:
     - name: Install govulncheck
       uses: ./.github/workflows/go-checks.yml@install-tool
       with:
-        tool-name: govulncheck
         tool-package: golang.org/x/vuln/cmd/govulncheck
 
     - name: Vulnerability check
@@ -98,7 +95,6 @@ jobs:
     - name: Install gosec
       uses: ./.github/workflows/go-checks.yml@install-tool
       with:
-        tool-name: gosec
         tool-package: github.com/securego/gosec/v2/cmd/gosec
 
     - name: Security check
@@ -126,27 +122,25 @@ install-tool:
   name: 'Install and Cache Go Tool'
   description: 'Install and cache a Go tool, ensuring latest version'
   inputs:
-    tool-name:
-      description: 'Name of the tool to install'
-      required: true
     tool-package:
       description: 'Go package path for the tool'
       required: true
   runs:
     using: 'composite'
     steps:
-      - name: Cache ${{ inputs.tool-name }}
+      - name: Cache tool
         uses: actions/cache@v4
         with:
-          path: ~/go/bin/${{ inputs.tool-name }}
-          key: ${{ inputs.tool-name }}-${{ runner.os }}-latest
+          path: ~/go/bin/${{ inputs.tool-package }}
+          key: ${{ inputs.tool-package }}-${{ runner.os }}-latest
           restore-keys: |
-            ${{ inputs.tool-name }}-${{ runner.os }}-
+            ${{ inputs.tool-package }}-${{ runner.os }}-
 
-      - name: Install ${{ inputs.tool-name }}
+      - name: Install tool
         shell: bash
         run: |
-          if [ ! -f ~/go/bin/${{ inputs.tool-name }} ]; then
+          TOOL_NAME=$(basename "${{ inputs.tool-package }}")
+          if [ ! -f ~/go/bin/$TOOL_NAME ]; then
             go install ${{ inputs.tool-package }}@latest
           else
             # Update to latest version
