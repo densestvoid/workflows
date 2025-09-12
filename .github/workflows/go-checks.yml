@@ -44,22 +44,11 @@ jobs:
     - name: Setup
       uses: ./.github/workflows/go-checks.yml@setup
 
-    - name: Cache staticcheck
-      uses: actions/cache@v4
-      with:
-        path: ~/go/bin/staticcheck
-        key: staticcheck-${{ runner.os }}-latest
-        restore-keys: |
-          staticcheck-${{ runner.os }}-
-
     - name: Install staticcheck
-      run: |
-        if [ ! -f ~/go/bin/staticcheck ]; then
-          go install honnef.co/go/tools/cmd/staticcheck@latest
-        else
-          # Update to latest version
-          go install honnef.co/go/tools/cmd/staticcheck@latest
-        fi
+      uses: ./.github/workflows/go-checks.yml@install-tool
+      with:
+        tool-name: staticcheck
+        tool-package: honnef.co/go/tools/cmd/staticcheck
 
     - name: Static analysis
       run: staticcheck ./...
@@ -72,22 +61,11 @@ jobs:
     - name: Setup
       uses: ./.github/workflows/go-checks.yml@setup
 
-    - name: Cache golangci-lint
-      uses: actions/cache@v4
-      with:
-        path: ~/go/bin/golangci-lint
-        key: golangci-lint-${{ runner.os }}-latest
-        restore-keys: |
-          golangci-lint-${{ runner.os }}-
-
     - name: Install golangci-lint
-      run: |
-        if [ ! -f ~/go/bin/golangci-lint ]; then
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-        else
-          # Update to latest version
-          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
-        fi
+      uses: ./.github/workflows/go-checks.yml@install-tool
+      with:
+        tool-name: golangci-lint
+        tool-package: github.com/golangci/golangci-lint/cmd/golangci-lint
 
     - name: Lint
       run: golangci-lint run ./...
@@ -100,22 +78,11 @@ jobs:
     - name: Setup
       uses: ./.github/workflows/go-checks.yml@setup
 
-    - name: Cache govulncheck
-      uses: actions/cache@v4
-      with:
-        path: ~/go/bin/govulncheck
-        key: govulncheck-${{ runner.os }}-latest
-        restore-keys: |
-          govulncheck-${{ runner.os }}-
-
     - name: Install govulncheck
-      run: |
-        if [ ! -f ~/go/bin/govulncheck ]; then
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-        else
-          # Update to latest version
-          go install golang.org/x/vuln/cmd/govulncheck@latest
-        fi
+      uses: ./.github/workflows/go-checks.yml@install-tool
+      with:
+        tool-name: govulncheck
+        tool-package: golang.org/x/vuln/cmd/govulncheck
 
     - name: Vulnerability check
       run: govulncheck ./...
@@ -128,29 +95,18 @@ jobs:
     - name: Setup
       uses: ./.github/workflows/go-checks.yml@setup
 
-    - name: Cache gosec
-      uses: actions/cache@v4
-      with:
-        path: ~/go/bin/gosec
-        key: gosec-${{ runner.os }}-latest
-        restore-keys: |
-          gosec-${{ runner.os }}-
-
     - name: Install gosec
-      run: |
-        if [ ! -f ~/go/bin/gosec ]; then
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
-        else
-          # Update to latest version
-          go install github.com/securego/gosec/v2/cmd/gosec@latest
-        fi
+      uses: ./.github/workflows/go-checks.yml@install-tool
+      with:
+        tool-name: gosec
+        tool-package: github.com/securego/gosec/v2/cmd/gosec
 
     - name: Security check
       run: gosec ./...
       working-directory: ${{ inputs.working-directory }}
       continue-on-error: false
 
-# Composite action definition
+# Composite action definitions
 setup:
   name: 'Setup Go Environment'
   description: 'Setup Go environment with checkout and Go installation'
@@ -165,3 +121,34 @@ setup:
         with:
           go-version: ${{ inputs.go-version }}
           check-latest: true
+
+install-tool:
+  name: 'Install and Cache Go Tool'
+  description: 'Install and cache a Go tool, ensuring latest version'
+  inputs:
+    tool-name:
+      description: 'Name of the tool to install'
+      required: true
+    tool-package:
+      description: 'Go package path for the tool'
+      required: true
+  runs:
+    using: 'composite'
+    steps:
+      - name: Cache ${{ inputs.tool-name }}
+        uses: actions/cache@v4
+        with:
+          path: ~/go/bin/${{ inputs.tool-name }}
+          key: ${{ inputs.tool-name }}-${{ runner.os }}-latest
+          restore-keys: |
+            ${{ inputs.tool-name }}-${{ runner.os }}-
+
+      - name: Install ${{ inputs.tool-name }}
+        shell: bash
+        run: |
+          if [ ! -f ~/go/bin/${{ inputs.tool-name }} ]; then
+            go install ${{ inputs.tool-package }}@latest
+          else
+            # Update to latest version
+            go install ${{ inputs.tool-package }}@latest
+          fi
