@@ -16,6 +16,10 @@ on:
         required: false
         type: string
         default: '.'
+    secrets:
+      github-token:
+        description: 'GitHub token for accessing private repositories'
+        required: false
 
 jobs:
   Vet:

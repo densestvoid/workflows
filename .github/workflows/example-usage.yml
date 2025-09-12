@@ -1,0 +1,37 @@
+# Example usage of the Go Checks reusable workflow
+# This file demonstrates how to use the go-checks workflow in your repository
+
+name: Example Go CI
+
+on:
+  push:
+    branches: [ main, develop ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  # Basic usage with default parameters
+  go-checks-basic:
+    uses: ./.github/workflows/go-checks.yml@main
+    
+  # Advanced usage with custom Go version
+  go-checks-custom-version:
+    uses: ./.github/workflows/go-checks.yml@main
+    with:
+      go-version: '1.21'
+      
+  # Usage with custom working directory (for monorepos)
+  go-checks-subdirectory:
+    uses: ./.github/workflows/go-checks.yml@main
+    with:
+      go-version: '1.21'
+      working-directory: './cmd/myapp'
+      
+  # Multiple Go versions for compatibility testing
+  go-checks-multi-version:
+    strategy:
+      matrix:
+        go-version: ['1.20', '1.21', 'stable']
+    uses: ./.github/workflows/go-checks.yml@main
+    with:
+      go-version: ${{ matrix.go-version }}
