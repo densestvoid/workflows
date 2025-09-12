@@ -1,0 +1,101 @@
+# Reusable Go Checks workflow
+# This workflow performs comprehensive Go code quality checks including vet, static analysis, linting, vulnerability checks, and security checks
+
+name: Go Checks
+
+on:
+  workflow_call:
+    inputs:
+      go-version:
+        description: 'Go version to use'
+        required: false
+        type: string
+        default: 'stable'
+      working-directory:
+        description: 'Working directory for the Go project'
+        required: false
+        type: string
+        default: '.'
+    secrets:
+      github-token:
+        description: 'GitHub token for accessing private repositories'
+        required: false
+
+jobs:
+  Vet:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Setup
+      uses: ./.github/workflows/go-checks.yml@setup
+        
+    - name: Vet
+      run: go vet ./...
+      working-directory: ${{ inputs.working-directory }}
+      
+  Static-Analysis:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Setup
+      uses: ./.github/workflows/go-checks.yml@setup
+
+    - name: Install tools
+      run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+    - name: Static analysis
+      run: staticcheck ./...
+      working-directory: ${{ inputs.working-directory }}
+
+  Lint:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Setup
+      uses: ./.github/workflows/go-checks.yml@setup
+
+    - name: Install tools
+      run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+    - name: Lint
+      run: golangci-lint run ./...
+      working-directory: ${{ inputs.working-directory }}
+
+  Vulnerability-Check:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Setup
+      uses: ./.github/workflows/go-checks.yml@setup
+
+    - name: Install tools
+      run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+    - name: Vulnerability check
+      run: govulncheck ./...
+      working-directory: ${{ inputs.working-directory }}
+
+  Security-Check:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Setup
+      uses: ./.github/workflows/go-checks.yml@setup
+
+    - name: Install tools
+      run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+    - name: Security check
+      run: gosec ./...
+      working-directory: ${{ inputs.working-directory }}
+
+# Composite action definition
+setup:
+  name: 'Setup Go Environment'
+  description: 'Setup Go environment with checkout and Go installation'
+  runs:
+    using: 'composite'
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+        
+      - name: Setup Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ inputs.go-version }}
+          check-latest: true
