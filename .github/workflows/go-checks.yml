@@ -31,7 +31,9 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: ./.github/workflows/go-checks.yml@setup
+      uses: ./.github/actions/setup
+      with:
+        go-version: ${{ inputs.go-version }}
         
     - name: Vet
       run: go vet ./...
@@ -42,10 +44,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: ./.github/workflows/go-checks.yml@setup
+      uses: ./.github/actions/setup
+      with:
+        go-version: ${{ inputs.go-version }}
 
     - name: Install staticcheck
-      uses: ./.github/workflows/go-checks.yml@install-tool
+      uses: ./.github/actions/install-tool
       with:
         tool-package: honnef.co/go/tools/cmd/staticcheck
 
@@ -58,10 +62,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: ./.github/workflows/go-checks.yml@setup
+      uses: ./.github/actions/setup
+      with:
+        go-version: ${{ inputs.go-version }}
 
     - name: Install golangci-lint
-      uses: ./.github/workflows/go-checks.yml@install-tool
+      uses: ./.github/actions/install-tool
       with:
         tool-package: github.com/golangci/golangci-lint/cmd/golangci-lint
 
@@ -74,10 +80,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: ./.github/workflows/go-checks.yml@setup
+      uses: ./.github/actions/setup
+      with:
+        go-version: ${{ inputs.go-version }}
 
     - name: Install govulncheck
-      uses: ./.github/workflows/go-checks.yml@install-tool
+      uses: ./.github/actions/install-tool
       with:
         tool-package: golang.org/x/vuln/cmd/govulncheck
 
@@ -90,10 +98,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: ./.github/workflows/go-checks.yml@setup
+      uses: ./.github/actions/setup
+      with:
+        go-version: ${{ inputs.go-version }}
 
     - name: Install gosec
-      uses: ./.github/workflows/go-checks.yml@install-tool
+      uses: ./.github/actions/install-tool
       with:
         tool-package: github.com/securego/gosec/v2/cmd/gosec
 
@@ -101,48 +111,3 @@ jobs:
       run: gosec ./...
       working-directory: ${{ inputs.working-directory }}
       continue-on-error: false
-
-# Composite action definitions
-setup:
-  name: 'Setup Go Environment'
-  description: 'Setup Go environment with checkout and Go installation'
-  runs:
-    using: 'composite'
-    steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-        
-      - name: Setup Go
-        uses: actions/setup-go@v5
-        with:
-          go-version: ${{ inputs.go-version }}
-          check-latest: true
-
-install-tool:
-  name: 'Install and Cache Go Tool'
-  description: 'Install and cache a Go tool, ensuring latest version'
-  inputs:
-    tool-package:
-      description: 'Go package path for the tool'
-      required: true
-  runs:
-    using: 'composite'
-    steps:
-      - name: Cache tool
-        uses: actions/cache@v4
-        with:
-          path: ~/go/bin/${{ inputs.tool-package }}
-          key: ${{ inputs.tool-package }}-${{ runner.os }}-latest
-          restore-keys: |
-            ${{ inputs.tool-package }}-${{ runner.os }}-
-
-      - name: Install tool
-        shell: bash
-        run: |
-          TOOL_NAME=$(basename "${{ inputs.tool-package }}")
-          if [ ! -f ~/go/bin/$TOOL_NAME ]; then
-            go install ${{ inputs.tool-package }}@latest
-          else
-            # Update to latest version
-            go install ${{ inputs.tool-package }}@latest
-          fi

@@ -1,0 +1,27 @@
+name: 'Install and Cache Go Tool'
+description: 'Install and cache a Go tool, ensuring latest version'
+inputs:
+  tool-package:
+    description: 'Go package path for the tool'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Cache tool
+      uses: actions/cache@v4
+      with:
+        path: ~/go/bin/${{ inputs.tool-package }}
+        key: ${{ inputs.tool-package }}-${{ runner.os }}-latest
+        restore-keys: |
+          ${{ inputs.tool-package }}-${{ runner.os }}-
+
+    - name: Install tool
+      shell: bash
+      run: |
+        TOOL_NAME=$(basename "${{ inputs.tool-package }}")
+        if [ ! -f ~/go/bin/$TOOL_NAME ]; then
+          go install ${{ inputs.tool-package }}@latest
+        else
+          # Update to latest version
+          go install ${{ inputs.tool-package }}@latest
+        fi
