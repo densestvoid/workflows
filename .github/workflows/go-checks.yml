@@ -1,0 +1,96 @@
+# Reusable Go Checks workflow
+# This workflow performs comprehensive Go code quality checks including vet, static analysis, linting, vulnerability checks, and security checks
+
+name: Go Checks
+
+on:
+  workflow_call:
+    inputs:
+      go-version:
+        description: 'Go version to use'
+        required: false
+        type: string
+        default: 'stable'
+      working-directory:
+        description: 'Working directory for the Go project'
+        required: false
+        type: string
+        default: '.'
+
+jobs:
+  Vet:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
+        check-latest: true
+        
+    - name: Vet
+      run: go vet ./...
+      working-directory: ${{ inputs.working-directory }}
+      
+  Static-Analysis:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
+        check-latest: true
+
+    - name: Install tools
+      run: go install honnef.co/go/tools/cmd/staticcheck@latest
+
+    - name: Static analysis
+      run: staticcheck ./...
+      working-directory: ${{ inputs.working-directory }}
+
+  Lint:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
+        check-latest: true
+
+    - name: Install tools
+      run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+
+    - name: Lint
+      run: golangci-lint run ./...
+      working-directory: ${{ inputs.working-directory }}
+
+  Vulnerability-Check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
+        check-latest: true
+
+    - name: Install tools
+      run: go install golang.org/x/vuln/cmd/govulncheck@latest
+
+    - name: Vulnerability check
+      run: govulncheck ./...
+      working-directory: ${{ inputs.working-directory }}
+
+  Security-Check:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v4
+    - uses: actions/setup-go@v5
+      with:
+        go-version: ${{ inputs.go-version }}
+        check-latest: true
+
+    - name: Install tools
+      run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+
+    - name: Security check
+      run: gosec ./...
+      working-directory: ${{ inputs.working-directory }}
