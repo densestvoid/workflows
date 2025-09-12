@@ -36,6 +36,7 @@ jobs:
     - name: Vet
       run: go vet ./...
       working-directory: ${{ inputs.working-directory }}
+      continue-on-error: false
       
   Static-Analysis:
     runs-on: ubuntu-latest
@@ -43,12 +44,27 @@ jobs:
     - name: Setup
       uses: ./.github/workflows/go-checks.yml@setup
 
-    - name: Install tools
-      run: go install honnef.co/go/tools/cmd/staticcheck@latest
+    - name: Cache staticcheck
+      uses: actions/cache@v4
+      with:
+        path: ~/go/bin/staticcheck
+        key: staticcheck-${{ runner.os }}-latest
+        restore-keys: |
+          staticcheck-${{ runner.os }}-
+
+    - name: Install staticcheck
+      run: |
+        if [ ! -f ~/go/bin/staticcheck ]; then
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+        else
+          # Update to latest version
+          go install honnef.co/go/tools/cmd/staticcheck@latest
+        fi
 
     - name: Static analysis
       run: staticcheck ./...
       working-directory: ${{ inputs.working-directory }}
+      continue-on-error: false
 
   Lint:
     runs-on: ubuntu-latest
@@ -56,12 +72,27 @@ jobs:
     - name: Setup
       uses: ./.github/workflows/go-checks.yml@setup
 
-    - name: Install tools
-      run: go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+    - name: Cache golangci-lint
+      uses: actions/cache@v4
+      with:
+        path: ~/go/bin/golangci-lint
+        key: golangci-lint-${{ runner.os }}-latest
+        restore-keys: |
+          golangci-lint-${{ runner.os }}-
+
+    - name: Install golangci-lint
+      run: |
+        if [ ! -f ~/go/bin/golangci-lint ]; then
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+        else
+          # Update to latest version
+          go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+        fi
 
     - name: Lint
       run: golangci-lint run ./...
       working-directory: ${{ inputs.working-directory }}
+      continue-on-error: false
 
   Vulnerability-Check:
     runs-on: ubuntu-latest
@@ -69,12 +100,27 @@ jobs:
     - name: Setup
       uses: ./.github/workflows/go-checks.yml@setup
 
-    - name: Install tools
-      run: go install golang.org/x/vuln/cmd/govulncheck@latest
+    - name: Cache govulncheck
+      uses: actions/cache@v4
+      with:
+        path: ~/go/bin/govulncheck
+        key: govulncheck-${{ runner.os }}-latest
+        restore-keys: |
+          govulncheck-${{ runner.os }}-
+
+    - name: Install govulncheck
+      run: |
+        if [ ! -f ~/go/bin/govulncheck ]; then
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+        else
+          # Update to latest version
+          go install golang.org/x/vuln/cmd/govulncheck@latest
+        fi
 
     - name: Vulnerability check
       run: govulncheck ./...
       working-directory: ${{ inputs.working-directory }}
+      continue-on-error: false
 
   Security-Check:
     runs-on: ubuntu-latest
@@ -82,12 +128,27 @@ jobs:
     - name: Setup
       uses: ./.github/workflows/go-checks.yml@setup
 
-    - name: Install tools
-      run: go install github.com/securego/gosec/v2/cmd/gosec@latest
+    - name: Cache gosec
+      uses: actions/cache@v4
+      with:
+        path: ~/go/bin/gosec
+        key: gosec-${{ runner.os }}-latest
+        restore-keys: |
+          gosec-${{ runner.os }}-
+
+    - name: Install gosec
+      run: |
+        if [ ! -f ~/go/bin/gosec ]; then
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+        else
+          # Update to latest version
+          go install github.com/securego/gosec/v2/cmd/gosec@latest
+        fi
 
     - name: Security check
       run: gosec ./...
       working-directory: ${{ inputs.working-directory }}
+      continue-on-error: false
 
 # Composite action definition
 setup:
