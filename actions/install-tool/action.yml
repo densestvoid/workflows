@@ -1,9 +1,13 @@
 name: 'Install and Cache Go Tool'
-description: 'Install and cache a Go tool, ensuring latest version'
+description: 'Install and cache a Go tool with specified version'
 inputs:
   tool-package:
     description: 'Go package path for the tool'
     required: true
+  tool-version:
+    description: 'Version of the tool to install (e.g., latest, v1.0.0, or specific commit)'
+    required: false
+    default: 'latest'
 runs:
   using: 'composite'
   steps:
@@ -11,7 +15,7 @@ runs:
       uses: actions/cache@v4
       with:
         path: ~/go/bin/${{ inputs.tool-package }}
-        key: ${{ inputs.tool-package }}-${{ runner.os }}-latest
+        key: ${{ inputs.tool-package }}-${{ inputs.tool-version }}-${{ runner.os }}
         restore-keys: |
           ${{ inputs.tool-package }}-${{ runner.os }}-
 
@@ -20,8 +24,8 @@ runs:
       run: |
         TOOL_NAME=$(basename "${{ inputs.tool-package }}")
         if [ ! -f ~/go/bin/$TOOL_NAME ]; then
-          go install ${{ inputs.tool-package }}@latest
+          go install ${{ inputs.tool-package }}@${{ inputs.tool-version }}
         else
-          # Update to latest version
-          go install ${{ inputs.tool-package }}@latest
+          # Install specified version
+          go install ${{ inputs.tool-package }}@${{ inputs.tool-version }}
         fi
