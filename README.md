@@ -4,7 +4,7 @@ A collection of reusable GitHub Actions workflows and composite actions for comm
 
 ## Workflows
 
-### Go Checks (`workflows/go-checks.yml`)
+### Go Checks (`.github/workflows/go-checks.yml`)
 
 A comprehensive Go code quality workflow that performs multiple checks in parallel.
 
@@ -26,7 +26,7 @@ A comprehensive Go code quality workflow that performs multiple checks in parall
 ```yaml
 jobs:
   go-checks:
-    uses: densestvoid/workflows/workflows/go-checks.yml@main
+    uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
     with:
       go-version: '1.21'
       working-directory: './my-go-project'
@@ -41,7 +41,7 @@ jobs:
 
 ## Actions
 
-### Setup (`actions/setup`)
+### Setup (`.github/actions/setup`)
 
 Sets up a Go environment with checkout and Go installation.
 
@@ -51,12 +51,12 @@ Sets up a Go environment with checkout and Go installation.
 **Usage:**
 ```yaml
 - name: Setup Go Environment
-  uses: densestvoid/workflows/actions/setup@main
+  uses: densestvoid/workflows/.github/actions/setup@main
   with:
     go-version: '1.21'
 ```
 
-### Install Tool (`actions/install-tool`)
+### Install Tool (`.github/actions/install-tool`)
 
 Installs and caches a Go tool with specified version.
 
@@ -67,7 +67,7 @@ Installs and caches a Go tool with specified version.
 **Usage:**
 ```yaml
 - name: Install golangci-lint
-  uses: densestvoid/workflows/actions/install-tool@main
+  uses: densestvoid/workflows/.github/actions/install-tool@main
   with:
     tool-package: github.com/golangci/golangci-lint/cmd/golangci-lint
     tool-version: 'v1.54.2'  # or 'latest' for latest version
@@ -77,16 +77,17 @@ Installs and caches a Go tool with specified version.
 
 ```
 densestvoid/workflows/
-├── workflows/           # Reusable workflows
-│   └── go-checks.yml
-├── actions/            # Composite actions
-│   ├── setup/
-│   │   └── action.yml
-│   └── install-tool/
-│       └── action.yml
+├── .github/
+│   ├── workflows/      # Reusable workflows
+│   │   └── go-checks.yml
+│   └── actions/        # Composite actions
+│       ├── setup/
+│       │   └── action.yml
+│       └── install-tool/
+│           └── action.yml
 └── README.md          # This file
 ```
 
 ## Contributing
 
-This repository is designed as a workflow library. Workflows and actions are organized in separate directories for better version control and reusability across different repositories.
+This repository is designed as a workflow library. Workflows and actions are organized in the `.github` directory following GitHub's standard conventions for reusable workflows and composite actions.
