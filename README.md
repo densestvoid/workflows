@@ -58,10 +58,11 @@ Sets up a Go environment with checkout and Go installation.
 
 ### Install Tool (`actions/install-tool`)
 
-Installs and caches a Go tool, ensuring the latest version.
+Installs and caches a Go tool with specified version.
 
 **Inputs:**
 - `tool-package` - Go package path for the tool (required)
+- `tool-version` - Version of the tool to install (optional, default: `latest`)
 
 **Usage:**
 ```yaml
@@ -69,6 +70,7 @@ Installs and caches a Go tool, ensuring the latest version.
   uses: densestvoid/workflows/actions/install-tool@main
   with:
     tool-package: github.com/golangci/golangci-lint/cmd/golangci-lint
+    tool-version: 'v1.54.2'  # or 'latest' for latest version
 ```
 
 ## Repository Structure
