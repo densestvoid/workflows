@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: your-org/your-repo/actions/setup@main
+      uses: densestvoid/workflows/actions/setup@main
       with:
         go-version: ${{ inputs.go-version }}
         
@@ -43,12 +43,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: your-org/your-repo/actions/setup@main
+      uses: densestvoid/workflows/actions/setup@main
       with:
         go-version: ${{ inputs.go-version }}
 
     - name: Install staticcheck
-      uses: your-org/your-repo/actions/install-tool@main
+      uses: densestvoid/workflows/actions/install-tool@main
       with:
         tool-package: honnef.co/go/tools/cmd/staticcheck
 
@@ -61,12 +61,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: your-org/your-repo/actions/setup@main
+      uses: densestvoid/workflows/actions/setup@main
       with:
         go-version: ${{ inputs.go-version }}
 
     - name: Install golangci-lint
-      uses: your-org/your-repo/actions/install-tool@main
+      uses: densestvoid/workflows/actions/install-tool@main
       with:
         tool-package: github.com/golangci/golangci-lint/cmd/golangci-lint
 
@@ -79,12 +79,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: your-org/your-repo/actions/setup@main
+      uses: densestvoid/workflows/actions/setup@main
       with:
         go-version: ${{ inputs.go-version }}
 
     - name: Install govulncheck
-      uses: your-org/your-repo/actions/install-tool@main
+      uses: densestvoid/workflows/actions/install-tool@main
       with:
         tool-package: golang.org/x/vuln/cmd/govulncheck
 
@@ -97,12 +97,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: your-org/your-repo/actions/setup@main
+      uses: densestvoid/workflows/actions/setup@main
       with:
         go-version: ${{ inputs.go-version }}
 
     - name: Install gosec
-      uses: your-org/your-repo/actions/install-tool@main
+      uses: densestvoid/workflows/actions/install-tool@main
       with:
         tool-package: github.com/securego/gosec/v2/cmd/gosec
 
