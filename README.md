@@ -16,8 +16,11 @@ A comprehensive Go code quality workflow that performs multiple checks in parall
 - **Security Check**: Security analysis using `gosec`
 
 **Parameters:**
-- `go-version` - Go version to use for the checks (optional, default: `stable`)
+- `go-version` - Explicit Go version (optional; overrides `go-version-file` when set)
+- `go-version-file` - Path to `go.mod`, `go.work`, etc. (optional; default: `{working-directory}/go.mod`)
 - `working-directory` - Working directory for the Go project (optional, default: `.`)
+
+When neither `go-version` nor `go-version-file` is set, the Go toolchain is read from `go.mod` in the working directory.
 
 **Secrets:**
 - `github-token` - GitHub token for accessing private repositories (optional, default: `${{ secrets.GITHUB_TOKEN }}`)
@@ -28,8 +31,8 @@ jobs:
   go-checks:
     uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
     with:
-      go-version: '1.21'
       working-directory: './my-go-project'
+    # Or pin explicitly: go-version: '1.21'
     secrets:
       github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
@@ -46,14 +49,16 @@ jobs:
 Sets up a Go environment with checkout and Go installation.
 
 **Inputs:**
-- `go-version` - Go version to use (optional, default: `stable`)
+- `go-version` - Explicit Go version (optional; overrides `go-version-file` when set)
+- `go-version-file` - Path to version file (optional; default: `{working-directory}/go.mod`)
+- `working-directory` - Go project root relative to repo root (optional, default: `.`)
 
 **Usage:**
 ```yaml
 - name: Setup Go Environment
   uses: densestvoid/workflows/.github/actions/setup@main
   with:
-    go-version: '1.21'
+    working-directory: '.'
 ```
 
 ### Install Tool (`.github/actions/install-tool`)
