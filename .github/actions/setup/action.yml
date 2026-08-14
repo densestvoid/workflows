@@ -2,17 +2,36 @@ name: 'Setup Go Environment'
 description: 'Setup Go environment with checkout and Go installation'
 inputs:
   go-version:
-    description: 'Go version to use'
+    description: 'Explicit Go version (overrides go-version-file when set)'
     required: false
-    default: 'stable'
+    default: ''
+  go-version-file:
+    description: 'Path to go.mod, go.work, etc. (default: {working-directory}/go.mod)'
+    required: false
+    default: ''
+  working-directory:
+    description: 'Go project root relative to repo root'
+    required: false
+    default: '.'
 runs:
   using: 'composite'
   steps:
     - name: Checkout code
       uses: actions/checkout@v7
-      
-    - name: Setup Go
+
+    - name: Setup Go (explicit version)
+      if: ${{ inputs.go-version != '' }}
       uses: actions/setup-go@v7
       with:
         go-version: ${{ inputs.go-version }}
         check-latest: true
+
+    - name: Setup Go (from version file)
+      if: ${{ inputs.go-version == '' }}
+      uses: actions/setup-go@v7
+      with:
+        go-version-file: >-
+          ${{ inputs.go-version-file != '' && inputs.go-version-file
+            || (inputs.working-directory == '.' && 'go.mod'
+              || format('{0}/go.mod', inputs.working-directory)) }}
+        check-latest: false
