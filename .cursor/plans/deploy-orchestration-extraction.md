@@ -1,17 +1,23 @@
 # Deploy Orchestration Extraction — Locked-in decisions
 
-## Orchestration: thin app-repo chaining (Option A only)
+## Orchestration: thin composition in each app repo
 
-**Decision:** App repos own thin `workflow_run` shells that statically wire shared building blocks. No `workflow_dispatch` black box.
+**Decision:** Each app repo owns and composes its own thin `workflow_run` shells. The workflows repo provides **building blocks** (actions); apps wire them together. No black box, no `workflow_dispatch`, no centralized full-pipeline workflow in workflows repo.
 
 ```
-gate → Build Go/Docker → Deploy PR/Prod → prepare-notify → notify
+gate → build.yml → Deploy Terraform → prepare-notify → notify
+  │        │              │
+  │        │              └── workflows repo action
+  │        └── app repo (composes Build Go + Build Docker)
+  └── workflows repo action
 ```
 
-- `workflow_run` listeners stay in each app repo (GitHub requirement)
-- Static `uses:` paths only — no dynamic workflow dispatch via API/gh CLI
-- Workflows repo provides shared actions and reusable workflows
-- Goal: avoid re-orchestrating deploy/terminate logic per repo, not a single entrypoint call
+- `workflow_run` listeners live in each app repo (GitHub requirement)
+- Static `uses:` paths only
+- Apps differ in `with:` inputs, `deployable_paths`, `build.yml`, and `prepare-notify` — that is intentional
+- **Repo template** (post-v0) bootstraps new apps with canonical copies of the thin shells — not runtime centralization
+
+**Rejected alternatives:** identical shell + repo variables only, `workflow_dispatch` central runner, full **Deploy PR** orchestrator workflow in workflows repo that hides composition.
 
 ---
 
@@ -19,13 +25,9 @@ gate → Build Go/Docker → Deploy PR/Prod → prepare-notify → notify
 
 Use plain, readable names. No `terraform-deploy`, `deploy-orchestrate`, `go-build-key`, etc.
 
-### Workflows (reusable `workflow_call`)
+### Workflows repo provides actions only (v0)
 
-| Name | File | Purpose |
-|------|------|---------|
-| **Deploy PR** | `deploy-pr.yml` | PR deploy pipeline (gate → build → terraform apply) |
-| **Deploy Prod** | `deploy-production.yml` | Production deploy pipeline |
-| **Terminate PR** | `terminate-pr.yml` | PR teardown from state |
+No full **Deploy PR** / **Deploy Prod** / **Terminate PR** orchestrator workflows in workflows repo. Apps compose these jobs locally using the actions below.
 
 ### Actions (composable building blocks)
 
@@ -41,7 +43,16 @@ Use plain, readable names. No `terraform-deploy`, `deploy-orchestrate`, `go-buil
 
 Go content-hash logic lives inside **Build Go** (no separate `go-build-key` action) — but must preserve budget's existing skip behavior (see below).
 
-Workflow display names in YAML: `Deploy PR`, `Deploy Prod`, `Build Go`, `Build Docker`, `Deploy Terraform`, etc.
+Workflow display names in YAML: `Build Go`, `Build Docker`, `Deploy Gate`, `Deploy Terraform`, `Terminate`, `Notify`.
+
+### App repo owns workflow files (composed from actions)
+
+| App workflow file | Composes |
+|-------------------|----------|
+| `deploy-pr.yml` | `workflow_run` → gate → `build.yml` → Deploy Terraform → prepare-notify → notify |
+| `deploy-production.yml` | `workflow_run` → gate (optional) → `build.yml` → Deploy Terraform → prepare-notify → notify |
+| `terminate-pr-deployment.yml` | `workflow_run` → Terminate → prepare-notify → notify |
+| `build.yml` | Build Go → Build Docker → Write Tfvars |
 
 ---
 
@@ -121,7 +132,9 @@ Build and deploy remain **separate jobs/workflows**:
 | Step | Responsibility |
 |------|----------------|
 | **Build Go** / **Build Docker** | Confirm-or-build, push if needed, write `tfvars_path` (last step) |
-| **Deploy PR** / **Deploy Prod** | Terraform init + apply only; consumes `tfvars_path` |
+| **Deploy Terraform** | Terraform init + apply only; consumes `tfvars_path` |
+
+**Deploy PR** / **Deploy Prod** are app-repo workflow *names*, not workflows-repo reusables.
 
 ---
 
@@ -134,8 +147,8 @@ Build and deploy remain **separate jobs/workflows**:
 | `tfvars_path` | App repo — non-secret config |
 | `deployable_paths` | App repo — arbitrary globs |
 | `prepare-notify` | App repo — message content |
-| **Notify** | Workflows repo — delivery only |
-| **Deploy Gate**, **Deploy PR/Prod**, **Terminate PR**, **Deploy Terraform** | Workflows repo |
+| **Deploy Gate**, **Deploy Terraform**, **Terminate**, **Notify**, **Build Go**, **Build Docker** | Workflows repo (actions) |
+| `deploy-pr.yml`, `build.yml`, `prepare-notify`, `terminate-pr-deployment.yml` | App repo (composed) |
 
 ---
 
@@ -161,8 +174,8 @@ Build and deploy remain **separate jobs/workflows**:
 
 | Phase | Scope | Budget changes |
 |-------|-------|----------------|
-| **v0** | Extract **Build Go**, **Build Docker**, **Deploy Gate**, **Deploy Terraform**, **Terminate**, **Write Tfvars**, **Notify**; add **Deploy PR**, **Deploy Prod**, **Terminate PR** workflows; README | **None** |
-| **v1** | Budget adopts thin shells + app `build.yml` | Budget only, after v0 merge |
+| **v0** | Extract actions: **Build Go**, **Build Docker**, **Deploy Gate**, **Deploy Terraform**, **Terminate**, **Write Tfvars**, **Notify**; README | **None** |
+| **v1** | Repo template with canonical thin shells; budget adopts from template | Budget + template |
 
 ---
 
@@ -172,10 +185,7 @@ Build and deploy remain **separate jobs/workflows**:
 densestvoid/workflows/
 ├── .github/
 │   ├── workflows/
-│   │   ├── go-checks.yml           # existing
-│   │   ├── deploy-pr.yml           # Deploy PR
-│   │   ├── deploy-production.yml   # Deploy Prod
-│   │   └── terminate-pr.yml        # Terminate PR
+│   │   └── go-checks.yml           # existing
 │   └── actions/
 │       ├── setup/                  # existing
 │       ├── install-tool/           # existing
@@ -186,30 +196,76 @@ densestvoid/workflows/
 │       ├── terminate/              # Terminate
 │       ├── write-tfvars/           # Write Tfvars
 │       └── notify/                 # Notify
+├── template/                       # v1 — repo template for new apps
+│   └── .github/workflows/
+│       ├── deploy-pr.yml
+│       ├── deploy-production.yml
+│       ├── terminate-pr-deployment.yml
+│       ├── build.yml
+│       └── ci.yml
 └── README.md
 ```
 
 ---
 
-## Example app shell (future — not v0)
+## Repo template (v1)
+
+New apps are bootstrapped from a **GitHub template repository** (or `template/` in workflows repo) containing canonical thin orchestration files. Each repo copies and customizes:
+
+- `with:` inputs (`deployable_paths`, `terraform_dir`, `image_name`, etc.)
+- `build.yml` composition (which actions to call)
+- `prepare-notify` message content
+
+The template is the **starting point**, not a runtime dependency. Apps own their workflow files after creation; sync template updates manually or via scripted regen when the canonical pattern changes.
+
+---
+
+## Example app composition (canonical pattern)
 
 ```yaml
-# app/.github/workflows/deploy-pr.yml  (budget migration, post-v0)
+# app/.github/workflows/deploy-pr.yml — composed by each app (from template)
+name: Deploy PR
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches-ignore: [main]
+
 jobs:
   gate:
     uses: densestvoid/workflows/.github/actions/deploy-gate@v0
+    with:
+      deployable_paths: |
+        **/*.go
+        go.mod
+        Dockerfile*
+        terraform/**
 
   build:
     needs: gate
-    uses: ./.github/workflows/build.yml    # composes Build Go + Build Docker
+    if: needs.gate.outputs.should_deploy == 'true'
+    uses: ./.github/workflows/build.yml
+    with:
+      deployment_id: pr-${{ github.event.workflow_run.pull_requests[0].number }}
+      tfvars_path: terraform/pr/terraform.tfvars
+      git_ref: ${{ github.event.workflow_run.head_sha }}
+    secrets: inherit
 
   deploy:
     needs: build
-    uses: densestvoid/workflows/.github/workflows/deploy-pr.yml@v0
+    runs-on: ubuntu-latest
+    steps:
+      - uses: densestvoid/workflows/.github/actions/deploy-terraform@v0
+        with:
+          terraform_dir: terraform/pr
+          backend_key: pr/pr-${{ github.event.workflow_run.pull_requests[0].number }}.tfstate
+          tfvars_path: terraform/pr/terraform.tfvars
 
   prepare-notify:
     needs: deploy
     if: always()
+    # app-specific message construction
 
   notify:
     needs: prepare-notify
