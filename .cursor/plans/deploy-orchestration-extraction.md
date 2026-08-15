@@ -33,15 +33,34 @@ Use plain, readable names. No `terraform-deploy`, `deploy-orchestrate`, `go-buil
 |------|-----------|---------|
 | **Build Go** | `build-go/` | Cached Go binary build |
 | **Build Docker** | `build-docker/` | Cached container push to GHCR; confirm-or-build |
-| **Deploy Gate** | `deploy-gate/` | Deployable path diff vs `main` |
-| **Deploy** | `deploy/` | Terraform init + apply (reads `tfvars_path`) |
+| **Deploy Gate** | `deploy-gate/` | Deployable path diff vs `main` — skip deploy when no deployable changes |
+| **Deploy Terraform** | `deploy-terraform/` | Terraform init + apply (reads `tfvars_path`) |
 | **Terminate** | `terminate/` | Terraform destroy from state (`pr-destroy` pattern) |
 | **Write Tfvars** | `write-tfvars/` | Non-secret tfvars file writer |
 | **Notify** | `notify/` | Slack + PR comment delivery |
 
-Go content-hash logic lives inside **Build Go** — no separate `go-build-key` action unless it proves necessary.
+Go content-hash logic lives inside **Build Go** (no separate `go-build-key` action) — but must preserve budget's existing skip behavior (see below).
 
-Workflow display names in YAML: `Deploy PR`, `Deploy Prod`, `Build Go`, `Build Docker`, etc.
+Workflow display names in YAML: `Deploy PR`, `Deploy Prod`, `Build Go`, `Build Docker`, `Deploy Terraform`, etc.
+
+---
+
+## Skip / cache behavior — must be preserved
+
+v0 extraction must maintain the same skip logic budget uses today. No regression on unnecessary builds or deploys.
+
+| Layer | Current behavior (budget) | v0 equivalent |
+|-------|---------------------------|---------------|
+| **PR deploy gate** | Skip entire deploy when branch has no deployable changes vs `main` | **Deploy Gate** |
+| **Go binary** | Content-hash cache key; skip compile when cache hit | **Build Go** (internal hash + cache) |
+| **Docker image** | Content-hash tag (`{deployment_id}-{docker_hash}`); skip push when manifest exists in GHCR | **Build Docker** (confirm-or-build) |
+| **CI go-checks** | Skip when Go sources unchanged vs base | **Build Go** outputs `go_sources_changed` for caller (e.g. `go-checks` workflow) |
+
+**Build Go** embeds the logic from budget's `go-build-key` action — hash `*.go` / `go.mod` / `go.sum`, detect change vs base revision, drive cache keys and skip decisions. Not a separate published action; same behavior, simpler surface.
+
+**Build Docker** runs only when needed; writes `tfvars_path` last, after image is confirmed. **Deploy Terraform** never checks images — it only applies.
+
+**Deploy Gate** globs are per-app; examples in docs are not requirements.
 
 ---
 
@@ -91,7 +110,7 @@ Build uses the app repo's `GITHUB_TOKEN` for GHCR push.
 ### tfvars — non-secret only
 
 - Deployment config only: `deployment_id`, `docker_image_tag`, `domain_name`, `region`, etc.
-- **No secrets in tfvars** — **Deploy** action injects provider tokens from workflows repo secrets at apply time
+- **No secrets in tfvars** — **Deploy Terraform** injects provider tokens from workflows repo secrets at apply time
 
 ---
 
@@ -116,7 +135,7 @@ Build and deploy remain **separate jobs/workflows**:
 | `deployable_paths` | App repo — arbitrary globs |
 | `prepare-notify` | App repo — message content |
 | **Notify** | Workflows repo — delivery only |
-| **Deploy Gate**, **Deploy PR/Prod**, **Terminate PR** | Workflows repo |
+| **Deploy Gate**, **Deploy PR/Prod**, **Terminate PR**, **Deploy Terraform** | Workflows repo |
 
 ---
 
@@ -142,7 +161,7 @@ Build and deploy remain **separate jobs/workflows**:
 
 | Phase | Scope | Budget changes |
 |-------|-------|----------------|
-| **v0** | Extract **Build Go**, **Build Docker**, **Deploy Gate**, **Deploy**, **Terminate**, **Write Tfvars**, **Notify**; add **Deploy PR**, **Deploy Prod**, **Terminate PR** workflows; README | **None** |
+| **v0** | Extract **Build Go**, **Build Docker**, **Deploy Gate**, **Deploy Terraform**, **Terminate**, **Write Tfvars**, **Notify**; add **Deploy PR**, **Deploy Prod**, **Terminate PR** workflows; README | **None** |
 | **v1** | Budget adopts thin shells + app `build.yml` | Budget only, after v0 merge |
 
 ---
@@ -163,7 +182,7 @@ densestvoid/workflows/
 │       ├── build-go/               # Build Go
 │       ├── build-docker/           # Build Docker
 │       ├── deploy-gate/            # Deploy Gate
-│       ├── deploy/                 # Deploy (terraform init + apply)
+│       ├── deploy-terraform/       # Deploy Terraform
 │       ├── terminate/              # Terminate
 │       ├── write-tfvars/           # Write Tfvars
 │       └── notify/                 # Notify
