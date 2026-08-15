@@ -112,12 +112,14 @@ Build jobs use the app repo's `GITHUB_TOKEN` (automatic) for GHCR push.
 
 **Next for workflows repo:** Begin Phase 1 (`go-build-key`, `go-build`, `docker-build`, `write-tfvars`) after budget PR #21 merges.
 
+**Build/deploy separation (locked in):** Build and deploy remain separate jobs/workflows. Confirm-or-build (manifest inspect → build if missing → write tfvars last) lives entirely in the **build** step. The deploy/terraform step does not merge build logic — it only consumes `tfvars_path` after build succeeds.
+
 ---
 
 ## Tech debt (budget)
 
 - ~~Remove automatic Terraform import step~~ — **done** in PR #21; merge to `main` then close
-- Replace image-exists crutch with confirm-or-build in `docker-build` action (during Phase 1 extraction)
+- Replace image-exists crutch with confirm-or-build in `docker-build` action (during Phase 1 extraction) — **build job only**; deploy job stays separate
 
 ## Example app deploy shell
 
