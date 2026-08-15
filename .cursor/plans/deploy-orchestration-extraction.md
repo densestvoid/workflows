@@ -5,13 +5,54 @@
 **Decision:** App repos own thin `workflow_run` shells that statically wire shared building blocks. No `workflow_dispatch` black box.
 
 ```
-gate → ./.github/workflows/build.yml → terraform-deploy@v0 → prepare-notify → notify
+gate → Build Go/Docker → Deploy PR/Prod → prepare-notify → notify
 ```
 
 - `workflow_run` listeners stay in each app repo (GitHub requirement)
 - Static `uses:` paths only — no dynamic workflow dispatch via API/gh CLI
-- Workflows repo provides shared actions and `terraform-deploy` / `terminate-pr` reusables
+- Workflows repo provides shared actions and reusable workflows
 - Goal: avoid re-orchestrating deploy/terminate logic per repo, not a single entrypoint call
+
+---
+
+## Naming — keep it simple
+
+Use plain, readable names. No `terraform-deploy`, `deploy-orchestrate`, `go-build-key`, etc.
+
+### Workflows (reusable `workflow_call`)
+
+| Name | File | Purpose |
+|------|------|---------|
+| **Deploy PR** | `deploy-pr.yml` | PR deploy pipeline (gate → build → terraform apply) |
+| **Deploy Prod** | `deploy-production.yml` | Production deploy pipeline |
+| **Terminate PR** | `terminate-pr.yml` | PR teardown from state |
+
+### Actions (composable building blocks)
+
+| Name | Directory | Purpose |
+|------|-----------|---------|
+| **Build Go** | `build-go/` | Cached Go binary build |
+| **Build Docker** | `build-docker/` | Cached container push to GHCR; confirm-or-build |
+| **Deploy Gate** | `deploy-gate/` | Deployable path diff vs `main` |
+| **Deploy** | `deploy/` | Terraform init + apply (reads `tfvars_path`) |
+| **Terminate** | `terminate/` | Terraform destroy from state (`pr-destroy` pattern) |
+| **Write Tfvars** | `write-tfvars/` | Non-secret tfvars file writer |
+| **Notify** | `notify/` | Slack + PR comment delivery |
+
+Go content-hash logic lives inside **Build Go** — no separate `go-build-key` action unless it proves necessary.
+
+Workflow display names in YAML: `Deploy PR`, `Deploy Prod`, `Build Go`, `Build Docker`, etc.
+
+---
+
+## Initial iteration scope
+
+**Workflows repo only. Do not touch the budget app.**
+
+- Build and validate all actions/workflows here first
+- Pin `@v0` for internal iteration
+- Budget migration is a **later phase** — after workflows repo pieces are stable and documented
+- Budget PR #21 (import removal) proceeds independently; no workflows-repo work should depend on or modify budget during v0
 
 ---
 
@@ -19,13 +60,11 @@ gate → ./.github/workflows/build.yml → terraform-deploy@v0 → prepare-notif
 
 ### GitHub Environments
 
-**Only `termination-delay`** is a GitHub Environment (wait timer for PR auto-termination). It lives in **app repos** (budget today) on the terminate workflow job — not in the workflows repo.
+**Only `termination-delay`** is a GitHub Environment (wait timer for PR auto-termination). It lives in **app repos** on the terminate workflow job — not in the workflows repo.
 
-All other configuration uses **repository secrets and repository variables** — no `deploy` environment or other environment-based secret stores.
+All other configuration uses **repository secrets and repository variables**.
 
 ### Shared / common secrets → workflows repo
-
-Infrastructure secrets used across apps are stored as **repository secrets on the workflows repo**:
 
 | Secret | Purpose |
 |--------|---------|
@@ -34,41 +73,50 @@ Infrastructure secrets used across apps are stored as **repository secrets on th
 | `TERRAFORM_AWS_S3_ACCESS_KEY_SECRET` | Terraform state backend |
 | `TERRAFORM_AWS_S3_REGION` | Terraform state backend |
 
-`terraform-deploy` / `terraform-apply` (workflows repo) read these directly when invoked via `uses: densestvoid/workflows/...`. App deploy jobs do **not** pass infra secrets on the happy path.
+**Deploy PR** / **Deploy Prod** read these from workflows repo repository secrets. App deploy jobs do not pass infra secrets on the happy path.
 
-**Optional hybrid:** `terraform-deploy` may declare optional `workflow_call` secrets so an app can override a shared secret when needed (different cloud account, etc.). Default: workflows repo secrets.
+**Optional hybrid:** reusable workflows may declare optional `workflow_call` secrets for per-app overrides. Default: workflows repo secrets.
 
 ### Repo-specific secrets → app repo
 
-Each app repo holds secrets and variables only it needs:
-
 | Secret / variable | Example |
 |-------------------|---------|
-| `SLACK_WEBHOOK_PR` | Budget PR notifications |
-| `SLACK_WEBHOOK_PROD` | Budget production notifications |
-| `PRODUCTION_DOMAIN` (variable) | Budget DNS zone |
-| `TERMINATION_DELAY_MINUTES` (variable, optional) | Override termination timing in notify |
+| `SLACK_WEBHOOK_PR` | PR notifications |
+| `SLACK_WEBHOOK_PROD` | Production notifications |
+| `PRODUCTION_DOMAIN` (variable) | DNS zone |
+| `TERMINATION_DELAY_MINUTES` (variable, optional) | Termination timing in notify |
 
-Build jobs use the app repo's `GITHUB_TOKEN` (automatic) for GHCR push.
+Build uses the app repo's `GITHUB_TOKEN` for GHCR push.
 
 ### tfvars — non-secret only
 
-- tfvars files contain deployment config only: `deployment_id`, `docker_image_tag`, `domain_name`, `region`, etc.
-- **No secrets in tfvars** — `terraform-apply` injects provider tokens from workflows repo secrets as `TF_VAR_*` / env at apply time
+- Deployment config only: `deployment_id`, `docker_image_tag`, `domain_name`, `region`, etc.
+- **No secrets in tfvars** — **Deploy** action injects provider tokens from workflows repo secrets at apply time
 
 ---
 
-## Extension points (unchanged)
+## Build / deploy separation
+
+Build and deploy remain **separate jobs/workflows**:
+
+| Step | Responsibility |
+|------|----------------|
+| **Build Go** / **Build Docker** | Confirm-or-build, push if needed, write `tfvars_path` (last step) |
+| **Deploy PR** / **Deploy Prod** | Terraform init + apply only; consumes `tfvars_path` |
+
+---
+
+## Extension points
 
 | Piece | Owner |
 |-------|-------|
-| `build.yml` | App repo — owns artifact correctness; may compose `go-build` / `docker-build` from workflows repo |
+| App `build.yml` | App repo — composes **Build Go** + **Build Docker**; owns artifact correctness |
 | `terraform/` | App repo |
-| `tfvars_path` | App repo — non-secret config; written by build as final step after artifacts confirmed |
+| `tfvars_path` | App repo — non-secret config |
 | `deployable_paths` | App repo — arbitrary globs |
 | `prepare-notify` | App repo — message content |
-| `notify` action | Workflows repo — delivery only |
-| `deploy-gate`, `terraform-deploy`, `terminate-pr` | Workflows repo |
+| **Notify** | Workflows repo — delivery only |
+| **Deploy Gate**, **Deploy PR/Prod**, **Terminate PR** | Workflows repo |
 
 ---
 
@@ -82,80 +130,67 @@ Build jobs use the app repo's `GITHUB_TOKEN` (automatic) for GHCR push.
 
 ## Progress
 
-### Budget repo — import removal (done, pending merge)
+### Budget repo — import removal (independent, do not touch during v0)
 
 | Item | Status |
 |------|--------|
-| Remove "Import existing resources (optional)" from `deploy-reusable.yml` | Done — branch `cursor/remove-import-step-ed43`, draft PR #21 |
+| Remove import step from `deploy-reusable.yml` | Done — PR #21 (draft) |
 | `SETUP.md` force_cleanup clarification | Done |
-| Manual A–F validation matrix | Skipped — not warranted for straight deletion |
-| Workflows-repo extraction | Deferred until PR #21 merges and budget is stable on `main` |
+| Budget migration to workflows repo | **Deferred** — after v0 stabilizes |
 
-**Budget decisions (do not re-introduce during workflows extraction):**
+### Workflows repo — v0 (current work)
 
-| Decision | Rationale |
-|----------|-----------|
-| No replacement import logic | Step was unreliable (`continue-on-error`), incomplete (~6 of ~10 resource types) |
-| No `scripts/destroy-pr-orphans.sh` | DO API orphan discovery/delete rejected |
-| No enhanced pre-cleanup / terminate for empty state | State is source of truth; destroy paths require S3 state |
-| Scenario C out of scope | Delete S3 state manually → `force_cleanup` fails with name collision — operator error, acceptable |
-
-**Expected impact (unchanged designed paths):**
-
-| Scenario | Impact |
-|----------|--------|
-| A/B — normal / no-op PR redeploy | None (`is_redeployment=true`; import never ran) |
-| D — failed deploy → terminate | None (state-driven `pr-destroy`) |
-| E — successful terminate | None |
-| F — redeploy after clean terminate | None (fresh state, no orphans) |
-| C — delete S3 state → force_cleanup | Fails (name collision) — undocumented recovery; acceptable |
-
-**Next for workflows repo:** Begin Phase 1 (`go-build-key`, `go-build`, `docker-build`, `write-tfvars`) after budget PR #21 merges.
-
-**Build/deploy separation (locked in):** Build and deploy remain separate jobs/workflows. Confirm-or-build (manifest inspect → build if missing → write tfvars last) lives entirely in the **build** step. The deploy/terraform step does not merge build logic — it only consumes `tfvars_path` after build succeeds.
+| Phase | Scope | Budget changes |
+|-------|-------|----------------|
+| **v0** | Extract **Build Go**, **Build Docker**, **Deploy Gate**, **Deploy**, **Terminate**, **Write Tfvars**, **Notify**; add **Deploy PR**, **Deploy Prod**, **Terminate PR** workflows; README | **None** |
+| **v1** | Budget adopts thin shells + app `build.yml` | Budget only, after v0 merge |
 
 ---
 
-## Tech debt (budget)
+## Proposed workflows repo structure (v0)
 
-- ~~Remove automatic Terraform import step~~ — **done** in PR #21; merge to `main` then close
-- Replace image-exists crutch with confirm-or-build in `docker-build` action (during Phase 1 extraction) — **build job only**; deploy job stays separate
+```
+densestvoid/workflows/
+├── .github/
+│   ├── workflows/
+│   │   ├── go-checks.yml           # existing
+│   │   ├── deploy-pr.yml           # Deploy PR
+│   │   ├── deploy-production.yml   # Deploy Prod
+│   │   └── terminate-pr.yml        # Terminate PR
+│   └── actions/
+│       ├── setup/                  # existing
+│       ├── install-tool/           # existing
+│       ├── build-go/               # Build Go
+│       ├── build-docker/           # Build Docker
+│       ├── deploy-gate/            # Deploy Gate
+│       ├── deploy/                 # Deploy (terraform init + apply)
+│       ├── terminate/              # Terminate
+│       ├── write-tfvars/           # Write Tfvars
+│       └── notify/                 # Notify
+└── README.md
+```
 
-## Example app deploy shell
+---
+
+## Example app shell (future — not v0)
 
 ```yaml
-# app/.github/workflows/deploy-pr.yml
+# app/.github/workflows/deploy-pr.yml  (budget migration, post-v0)
 jobs:
   gate:
     uses: densestvoid/workflows/.github/actions/deploy-gate@v0
-    with:
-      deployable_paths: |
-        **/*.go
-        terraform/**
 
   build:
     needs: gate
-    if: needs.gate.outputs.should_deploy == 'true'
-    uses: ./.github/workflows/build.yml
-    with:
-      deployment_id: pr-${{ ... }}
-      tfvars_path: terraform/pr/terraform.tfvars
-      git_ref: ${{ ... }}
-    secrets: inherit   # GITHUB_TOKEN for GHCR — app repo
+    uses: ./.github/workflows/build.yml    # composes Build Go + Build Docker
 
   deploy:
     needs: build
-    uses: densestvoid/workflows/.github/workflows/terraform-deploy.yml@v0
-    with:
-      terraform_dir: terraform/pr
-      backend_key: pr/pr-${{ ... }}.tfstate
-      tfvars_path: terraform/pr/terraform.tfvars
-    # DO_TOKEN, TERRAFORM_AWS_S3_* — workflows repo repository secrets
+    uses: densestvoid/workflows/.github/workflows/deploy-pr.yml@v0
 
   prepare-notify:
     needs: deploy
     if: always()
-    # app-specific; uses SLACK_WEBHOOK_* from app repo
 
   notify:
     needs: prepare-notify
@@ -163,4 +198,14 @@ jobs:
       - uses: densestvoid/workflows/.github/actions/notify@v0
 ```
 
-Terminate workflow in app repo uses `environment: termination-delay` for scheduled PR teardown; infra destroy secrets come from workflows repo via `terminate-pr` reusable workflow.
+---
+
+## Budget import removal — do not re-introduce
+
+| Rejected | Rationale |
+|----------|-----------|
+| Replacement import logic | Unreliable, incomplete |
+| `destroy-pr-orphans.sh` | DO API orphan scripts rejected |
+| Enhanced pre-cleanup/terminate for empty state | State is source of truth |
+
+Scenario C (manual S3 state delete → force_cleanup fails) is acceptable operator error.
