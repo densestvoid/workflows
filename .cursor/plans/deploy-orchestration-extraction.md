@@ -153,25 +153,52 @@ Optional hybrid: **Deploy Terraform** accepts override secrets via inputs; defau
 
 ---
 
-## Repo template (v1)
+## GitHub template repository (v1)
 
-A **GitHub template repo** (or `template/` in workflows repo) provides **example compositions**, not a runtime orchestrator:
+New apps are bootstrapped from a **dedicated GitHub template repository** — a native GitHub feature, not a folder inside the workflows repo.
+
+### Setup
+
+1. Create a repo (e.g. `densestvoid/app-deploy-template`)
+2. **Settings → General → Template repository** — enable the checkbox
+3. Populate with example workflow compositions that call actions from `densestvoid/workflows@v0`
+
+### Contents (example compositions, not orchestration in workflows repo)
 
 ```
-template/.github/workflows/
-  deploy-pr.yml              # example: gate → build.yml → Deploy Terraform → notify
-  deploy-production.yml
-  terminate-pr-deployment.yml
-  build.yml                  # example: Build Go + Build Docker
-  ci.yml
+densestvoid/app-deploy-template/
+├── .github/
+│   └── workflows/
+│       ├── ci.yml
+│       ├── build.yml                  # example: Build Go + Build Docker
+│       ├── deploy-pr.yml              # example: gate → build → Deploy Terraform → notify
+│       ├── deploy-production.yml
+│       └── terminate-pr-deployment.yml
+└── README.md                          # secrets/variables to configure; how to customize
 ```
 
-New apps copy the template and customize:
-- Which build steps to compose
+### Creating a new app
+
+**GitHub UI:** **Use this template** on the template repo page.
+
+**CLI:**
+
+```bash
+gh repo create my-new-app --template densestvoid/app-deploy-template --private
+```
+
+### After creation
+
+Each new repo owns its workflow files. Customize:
+
+- Which build steps to compose in `build.yml`
 - Which deploy step(s) to call (Terraform, CLI, etc.)
 - `deployable_paths`, inputs, prepare-notify content
+- Per-repo secrets, variables, and `termination-delay` environment
 
-Template updates are synced manually or via regen — apps own their files after creation.
+Template updates do **not** auto-sync to existing repos. Re-sync manually or regenerate when the canonical pattern changes.
+
+The workflows repo (`densestvoid/workflows`) stays **actions only** — no template files there.
 
 ---
 
@@ -242,9 +269,10 @@ densestvoid/workflows/
 │       ├── terminate/
 │       ├── write-tfvars/
 │       └── notify/
-├── template/                       # v1 — example compositions for new apps
 └── README.md                       # step contracts + composition patterns
 ```
+
+Template repo (`densestvoid/app-deploy-template`) is a **separate repository** — see GitHub template repository section above.
 
 ---
 
@@ -253,7 +281,7 @@ densestvoid/workflows/
 | Phase | Scope | Budget |
 |-------|-------|--------|
 | **v0** | Composable actions + README | None |
-| **v1** | Repo template + budget migration to composed steps | Budget |
+| **v1** | Create `densestvoid/app-deploy-template` (GitHub template repo); budget migration to composed steps | Template repo + budget |
 
 ---
 
@@ -285,3 +313,4 @@ Replace `deploy-reusable.yml` monolith with composed steps from workflows repo. 
 | `workflow_dispatch` central runner | Black box; async; awkward notify |
 | Identical shell + repo variables only | Hides composition; inflexible deploy strategy |
 | Terraform as implicit default pipeline | Deploy strategy must be composable |
+| `template/` folder in workflows repo | Use a dedicated GitHub template repository instead |
