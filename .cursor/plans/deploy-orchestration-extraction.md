@@ -2,33 +2,27 @@
 
 ## Core principle: composable steps only, no orchestration
 
-The workflows repo provides **reusable actions** — atomic, composable steps. It does **not** provide orchestration workflows (no **Deploy PR**, no full pipelines, no prescribed job graphs).
+The workflows repo provides **reusable actions** — atomic, composable steps. It does **not** provide orchestration workflows (no full pipelines, no prescribed job graphs).
 
 Each app repo owns:
 - `workflow_run` triggers
 - Job ordering and `needs:` wiring
 - Which steps to call and in what order
 - Build composition (language, artifacts, count)
-- Deploy strategy (Terraform, CLI/SDK release, or something else)
+- Deploy strategy (Terraform, CLI/SDK release, Docker push only, etc.)
 
 ```
 workflows repo = toolbox
 app repo     = assembly instructions
 ```
 
-A typical Go + Terraform app might compose:
+Example compositions (app-defined):
 
 ```
 Deploy Gate → build.yml → Deploy Terraform → prepare-notify → Notify
-```
-
-A CLI release app might compose:
-
-```
 Deploy Gate → build.yml → Release CLI → prepare-notify → Notify
+Deploy Gate → Build Docker → prepare-notify → Notify   # image only, no Terraform
 ```
-
-Both are valid. The workflows repo does not prefer one over the other.
 
 ---
 
@@ -39,92 +33,95 @@ Both are valid. The workflows repo does not prefer one over the other.
 | Name | Directory | Purpose |
 |------|-----------|---------|
 | **Build Go** | `build-go/` | Cached Go binary build; content-hash skip logic embedded |
-| **Build Docker** | `build-docker/` | Cached GHCR push; confirm-or-build |
-| **Deploy Gate** | `deploy-gate/` | Deployable path diff vs `main` — skip when no deployable changes |
-| **Deploy Terraform** | `deploy-terraform/` | Terraform init + apply; reads `tfvars_path`; injects infra secrets |
-| **Terminate** | `terminate/` | Terraform destroy from state (`pr-destroy` pattern) |
-| **Write Tfvars** | `write-tfvars/` | Non-secret tfvars file writer |
+| **Build Docker** | `build-docker/` | Cached container push to registry; confirm-or-build; **no Terraform/tfvars knowledge** |
+| **Deploy Gate** | `deploy-gate/` | Deployable path diff vs `main` |
+| **Deploy Terraform** | `deploy-terraform/` | Terraform init + apply; variables passed as inputs |
+| **Terminate Terraform** | `terminate-terraform/` | Terraform destroy from state (`pr-destroy` pattern) |
 | **Notify** | `notify/` | Slack + PR comment delivery |
 
-Future deploy steps (not v0, same composable pattern):
+Future steps (same composable pattern): **Release CLI**, **Deploy Static**, etc.
 
-| Name | Purpose |
-|------|---------|
-| **Release CLI** | Example: publish binaries to a release target via CLI/SDK |
-| **Deploy Static** | Example: upload assets to object storage |
-
-Workflow display names in YAML match the action names: `Build Go`, `Deploy Terraform`, etc.
+**Removed:** **Write Tfvars** — variables pass directly into **Deploy Terraform** (see below).
 
 **No orchestrator workflows** in workflows repo beyond existing **Go Checks** (`go-checks.yml`).
 
 ---
 
-## Skip / cache behavior — must be preserved
+## Build Docker — registry only
 
-v0 steps must preserve budget's skip logic where applicable:
+**Build Docker** must not know about Terraform, tfvars, or deployment targets. It:
+
+- Confirms or builds and pushes an image to a registry (GHCR by default)
+- Outputs: `image_ref`, `image_tag` (and optionally digest)
+
+The caller decides what happens next — **Deploy Terraform**, a future release step, or nothing. Many apps may push to Docker Hub / GHCR without any Terraform step.
+
+**Build Go** similarly outputs build artifacts only; no deploy assumptions.
+
+---
+
+## Deploy Terraform — variables as inputs, not tfvars files
+
+**Decision:** Drop **Write Tfvars**. **Deploy Terraform** accepts variables as action inputs. Callers pass non-secret values explicitly; infra secrets are injected from workflows repo repository secrets.
+
+### Proposed **Deploy Terraform** inputs
+
+| Input | Purpose |
+|-------|---------|
+| `terraform_dir` | Path to Terraform root module |
+| `backend_key` | S3 state key |
+| `variables` | JSON object of non-secret Terraform variables (e.g. `{"deployment_id":"pr-123","docker_image_tag":"pr-123-abc"}`) |
+| `var_files` | Optional list of committed var-file paths (e.g. `terraform/pr/terraform.tfvars.example` overrides) — only if app uses static files |
+
+Secrets (`DO_TOKEN`, etc.) are **not** in `variables` — **Deploy Terraform** maps workflows repo secrets to `TF_VAR_*` or `-var` internally.
+
+### Caller wiring (build → deploy)
+
+```yaml
+jobs:
+  build:
+    uses: ./.github/workflows/build.yml
+    # Build Docker outputs image_tag
+
+  deploy:
+    needs: build
+    steps:
+      - uses: densestvoid/workflows/.github/actions/deploy-terraform@v0
+        with:
+          terraform_dir: terraform/pr
+          backend_key: pr/pr-123.tfstate
+          variables: |
+            {
+              "deployment_id": "pr-123",
+              "docker_image_tag": "${{ needs.build.outputs.image_tag }}"
+            }
+```
+
+### Issues with dropping tfvars files (and mitigations)
+
+| Issue | Severity | Mitigation |
+|-------|----------|------------|
+| **GitHub Actions inputs are strings** | Low | `variables` is a JSON string; action parses and sets `TF_VAR_*` or `-var` per key |
+| **Complex Terraform types** (objects, maps, lists) | Medium | JSON encoding in `variables` works for most types Terraform accepts via `-var`; document examples for `domain`-style objects. Apps with exotic HCL may use optional `var_files` for static committed files |
+| **Many variables per app** | Low | Each app passes only what its module needs; no shared schema required. Verbose but explicit |
+| **HCL escaping / special characters** | Medium | Action uses `jq` + `terraform -var` with proper quoting; document constraints |
+| **Per-app variable names differ** | Low (feature) | No fixed action input per var — generic JSON map. Budget passes `docker_image_tag`; another app passes different keys |
+| **Checked-in defaults** | Low | Optional `var_files` input for `*.tfvars` committed in app repo; dynamic values from build still passed via `variables` JSON |
+| **Sensitive values in `variables` JSON** | High if misused | Document: never put secrets in `variables`; secrets only via workflows repo secret injection. Action rejects known secret key names? Optional guard |
+| **Debugging** | Low | Action logs variable *keys* applied, not values (or masks values) |
+
+**Verdict:** Passing variables as inputs is cleaner than **Write Tfvars** — better separation (build doesn't write deploy config), aligns with **Build Docker** having no Terraform knowledge. Optional `var_files` covers edge cases without making file construction a required step.
+
+---
+
+## Skip / cache behavior — must be preserved
 
 | Layer | Budget today | v0 step |
 |-------|--------------|---------|
-| **PR deploy gate** | Skip deploy when no deployable changes | **Deploy Gate** |
-| **Go binary** | Content-hash cache; skip compile on hit | **Build Go** |
-| **Docker image** | Content-hash tag; skip push when manifest exists | **Build Docker** |
-| **CI go-checks** | Skip when Go sources unchanged | **Build Go** → `go_sources_changed` |
-
-**Build Go** embeds budget's `go-build-key` logic internally.
-
-**Build Docker** writes `tfvars_path` last (when used); **Deploy Terraform** only applies — no image checks.
-
-Apps that don't use Go/Docker simply don't call those steps.
-
----
-
-## Build — fully app-composed
-
-Each app owns `build.yml` (or inline jobs) and composes whichever build steps it needs:
-
-```yaml
-# budget — Go + Docker
-jobs:
-  build:
-    steps:
-      - uses: densestvoid/workflows/.github/actions/build-go@v0
-      - uses: densestvoid/workflows/.github/actions/build-docker@v0
-      - uses: densestvoid/workflows/.github/actions/write-tfvars@v0
-```
-
-```yaml
-# hypothetical CLI app — no Docker
-jobs:
-  build:
-    steps:
-      - run: npm ci && npm run build
-      - uses: densestvoid/workflows/.github/actions/release-cli@v0   # future
-```
-
-Build steps have **no mandated outputs** to the orchestrator. Whatever the deploy step needs (tfvars, version tag, artifact path) is written by the app’s build job.
-
----
-
-## Deploy — composable strategy, not Terraform-by-default
-
-**Deploy Terraform** is one deploy step, not the default pipeline ending.
-
-- Apps using infra-as-code call **Deploy Terraform** after build
-- Apps using CLI/SDK release call a future **Release CLI** (or their own steps) instead
-- Apps can chain multiple deploy steps if needed
-
-**Deploy Terraform** contract:
-- Inputs: `terraform_dir`, `backend_key`, `tfvars_path`
-- Infra secrets from workflows repo repository secrets (injected at apply time)
-- tfvars is non-secret config only
-
----
-
-## Notify — delivery only
-
-**Notify** posts caller-supplied Slack payload and/or PR comment.
-
-**prepare-notify** stays in each app repo — message content is app-specific.
+| **PR deploy gate** | Skip when no deployable changes | **Deploy Gate** |
+| **Go binary** | Content-hash cache | **Build Go** |
+| **Docker image** | Content-hash tag; confirm-or-build | **Build Docker** |
+| **CI go-checks** | Skip when Go unchanged | **Build Go** → `go_sources_changed` |
 
 ---
 
@@ -132,111 +129,78 @@ Build steps have **no mandated outputs** to the orchestrator. Whatever the deplo
 
 | Where | What |
 |-------|------|
-| **Workflows repo secrets** | Shared infra: `DO_TOKEN`, `TERRAFORM_AWS_S3_*` (used by **Deploy Terraform**, **Terminate**) |
+| **Workflows repo secrets** | `DO_TOKEN`, `TERRAFORM_AWS_S3_*` — used by **Deploy Terraform**, **Terminate Terraform** |
 | **App repo secrets/variables** | Slack webhooks, `PRODUCTION_DOMAIN`, app-specific tokens |
-| **App repo environment** | `termination-delay` only (wait timer on terminate job) |
-
-No secrets in tfvars.
-
-Optional hybrid: **Deploy Terraform** accepts override secrets via inputs; default is workflows repo secrets.
+| **App repo environment** | `termination-delay` only |
 
 ---
 
-## Initial iteration scope
+## Rollout plan
 
-**v0 — workflows repo only. Do not touch budget.**
+| Phase | Scope | Repos touched |
+|-------|-------|---------------|
+| **v0** | Composable actions in workflows repo; establish shared VPC / infra foundations as needed | `workflows` |
+| **v0 test** | Validate composition with **krogerrecipeshopper** — iterate on actions until happy | `workflows`, `krogerrecipeshopper` |
+| **v1** | Tag `@v1`; create `densestvoid/app-deploy-template` GitHub template repo | `workflows`, `app-deploy-template` |
+| **v1 migrate** | Update **budget** to composed steps | `budget` |
 
-- Ship composable actions listed above
-- README documents step contracts, composition examples, and extension pattern for new deploy steps
-- Pin `@v0`
-- Budget migration deferred
+**Budget is last** — not touched during v0 iteration. Krogerrecipeshopper is the proving ground.
 
 ---
 
 ## GitHub template repository (v1)
 
-New apps are bootstrapped from a **dedicated GitHub template repository** — a native GitHub feature, not a folder inside the workflows repo.
+Separate repo: `densestvoid/app-deploy-template`
 
-### Setup
+- Enable **Settings → Template repository**
+- Example compositions calling `densestvoid/workflows@v1` actions
+- `gh repo create my-app --template densestvoid/app-deploy-template`
 
-1. Create a repo (e.g. `densestvoid/app-deploy-template`)
-2. **Settings → General → Template repository** — enable the checkbox
-3. Populate with example workflow compositions that call actions from `densestvoid/workflows@v0`
-
-### Contents (example compositions, not orchestration in workflows repo)
-
-```
-densestvoid/app-deploy-template/
-├── .github/
-│   └── workflows/
-│       ├── ci.yml
-│       ├── build.yml                  # example: Build Go + Build Docker
-│       ├── deploy-pr.yml              # example: gate → build → Deploy Terraform → notify
-│       ├── deploy-production.yml
-│       └── terminate-pr-deployment.yml
-└── README.md                          # secrets/variables to configure; how to customize
-```
-
-### Creating a new app
-
-**GitHub UI:** **Use this template** on the template repo page.
-
-**CLI:**
-
-```bash
-gh repo create my-new-app --template densestvoid/app-deploy-template --private
-```
-
-### After creation
-
-Each new repo owns its workflow files. Customize:
-
-- Which build steps to compose in `build.yml`
-- Which deploy step(s) to call (Terraform, CLI, etc.)
-- `deployable_paths`, inputs, prepare-notify content
-- Per-repo secrets, variables, and `termination-delay` environment
-
-Template updates do **not** auto-sync to existing repos. Re-sync manually or regenerate when the canonical pattern changes.
-
-The workflows repo (`densestvoid/workflows`) stays **actions only** — no template files there.
+Workflows repo stays actions-only — no template files inside it.
 
 ---
 
-## Example app composition (Go + Terraform — one pattern, not the only pattern)
+## Workflows repo structure (v0)
+
+```
+densestvoid/workflows/
+├── .github/
+│   ├── workflows/
+│   │   └── go-checks.yml
+│   └── actions/
+│       ├── setup/
+│       ├── install-tool/
+│       ├── build-go/
+│       ├── build-docker/
+│       ├── deploy-gate/
+│       ├── deploy-terraform/
+│       ├── terminate-terraform/
+│       └── notify/
+└── README.md
+```
+
+---
+
+## Example composition (Go + Terraform — one pattern)
 
 ```yaml
-# app/.github/workflows/deploy-pr.yml
-name: Deploy PR
-
-on:
-  workflow_run:
-    workflows: [CI]
-    types: [completed]
-    branches-ignore: [main]
-
 jobs:
   gate:
     uses: densestvoid/workflows/.github/actions/deploy-gate@v0
-    with:
-      deployable_paths: |
-        **/*.go
-        terraform/**
 
   build:
     needs: gate
-    if: needs.gate.outputs.should_deploy == 'true'
-    uses: ./.github/workflows/build.yml
-    secrets: inherit
+    uses: ./.github/workflows/build.yml    # Build Go + Build Docker; outputs image_tag
 
   deploy:
     needs: build
-    runs-on: ubuntu-latest
     steps:
       - uses: densestvoid/workflows/.github/actions/deploy-terraform@v0
         with:
           terraform_dir: terraform/pr
           backend_key: pr/pr-${{ ... }}.tfstate
-          tfvars_path: terraform/pr/terraform.tfvars
+          variables: |
+            {"deployment_id":"pr-${{ ... }}","docker_image_tag":"${{ needs.build.outputs.image_tag }}"}
 
   prepare-notify:
     needs: [gate, build, deploy]
@@ -248,60 +212,19 @@ jobs:
       - uses: densestvoid/workflows/.github/actions/notify@v0
 ```
 
-Apps swap `deploy` job steps freely. Budget uses **Deploy Terraform**; a future app might replace that job entirely.
-
----
-
-## Workflows repo structure (v0)
-
-```
-densestvoid/workflows/
-├── .github/
-│   ├── workflows/
-│   │   └── go-checks.yml           # existing — CI checks, not deploy orchestration
-│   └── actions/
-│       ├── setup/                  # existing
-│       ├── install-tool/           # existing
-│       ├── build-go/
-│       ├── build-docker/
-│       ├── deploy-gate/
-│       ├── deploy-terraform/
-│       ├── terminate/
-│       ├── write-tfvars/
-│       └── notify/
-└── README.md                       # step contracts + composition patterns
-```
-
-Template repo (`densestvoid/app-deploy-template`) is a **separate repository** — see GitHub template repository section above.
-
----
-
-## Phases
-
-| Phase | Scope | Budget |
-|-------|-------|--------|
-| **v0** | Composable actions + README | None |
-| **v1** | Create `densestvoid/app-deploy-template` (GitHub template repo); budget migration to composed steps | Template repo + budget |
-
 ---
 
 ## Progress
 
-### Budget — import removal (independent)
+### Budget — import removal
 
-PR #21 removes automatic Terraform import. Do not re-introduce import, orphan scripts, or empty-state cleanup hacks.
+PR #21 (independent). Budget migration deferred until v1 after krogerrecipeshopper validation.
 
-### Budget migration (v1)
+### Internal constants
 
-Replace `deploy-reusable.yml` monolith with composed steps from workflows repo. Budget's orchestration stays in budget; only the step implementations move shared.
-
----
-
-## Internal constants
-
-- S3 state bucket: `densestvoid-terraform` (used by **Deploy Terraform** / **Terminate**)
+- S3 state bucket: `densestvoid-terraform`
 - Terraform version: `1.5.7`
-- Pin: `@v0` during iteration
+- Pin `@v0` during iteration → `@v1` after krogerrecipeshopper validation
 
 ---
 
@@ -309,8 +232,8 @@ Replace `deploy-reusable.yml` monolith with composed steps from workflows repo. 
 
 | Approach | Why |
 |----------|-----|
-| Full **Deploy PR/Prod** orchestrator workflows in workflows repo | Too thick; can't customize build/deploy per app |
-| `workflow_dispatch` central runner | Black box; async; awkward notify |
-| Identical shell + repo variables only | Hides composition; inflexible deploy strategy |
-| Terraform as implicit default pipeline | Deploy strategy must be composable |
-| `template/` folder in workflows repo | Use a dedicated GitHub template repository instead |
+| **Write Tfvars** action | Variables pass directly to **Deploy Terraform**; build steps don't write deploy config |
+| Build Docker knows about Terraform | Registry push only; caller wires deploy separately |
+| Full orchestrator workflows in workflows repo | Too thick; apps compose steps |
+| `workflow_dispatch` central runner | Black box |
+| Budget-first migration | Krogerrecipeshopper validates v0 first |
