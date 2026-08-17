@@ -95,22 +95,28 @@ runs:
           exit 1
         fi
 
-        docker load -i "$TAR_FILE"
-        LOADED_TAG=$(docker images --format '{{.Repository}}:{{.Tag}}' | head -1)
-        LOCAL_IMAGE="${LOADED_TAG:-build-docker-local:${IMAGE_ARTIFACT}}"
+        LOAD_OUTPUT=$(docker load -i "$TAR_FILE")
+        echo "$LOAD_OUTPUT"
+        LOCAL_IMAGE=$(echo "$LOAD_OUTPUT" | sed -n 's/^Loaded image: //p' | head -1)
+        if [ -z "$LOCAL_IMAGE" ]; then
+          IMAGE_ID=$(echo "$LOAD_OUTPUT" | sed -n 's/^Loaded image ID: //p' | head -1)
+          if [ -z "$IMAGE_ID" ]; then
+            echo "Could not determine loaded image from docker load output" >&2
+            exit 1
+          fi
+          LOCAL_IMAGE="$IMAGE_ID"
+        fi
 
         configured=0
-        succeeded=0
         all_exist=true
         primary_ref=""
         failures=0
 
         push_registry() {
-          local registry="$1"
-          local image="$2"
-          local username="$3"
-          local password="$4"
-          local prefix="$5"
+          local image="$1"
+          local username="$2"
+          local password="$3"
+          local prefix="$4"
 
           if [ -z "$image" ] || [ -z "$username" ] || [ -z "$password" ]; then
             return 0
@@ -142,7 +148,6 @@ runs:
             echo "${prefix}-exists=true" >> "$GITHUB_OUTPUT"
             echo "${prefix}-image-ref=${ref}" >> "$GITHUB_OUTPUT"
             echo "${prefix}-pushed=false" >> "$GITHUB_OUTPUT"
-            succeeded=$((succeeded + 1))
             [ -z "$primary_ref" ] && primary_ref="$ref"
             return 0
           fi
@@ -151,7 +156,6 @@ runs:
           all_exist=false
 
           if [ "$CHECK_ONLY" = "true" ]; then
-            succeeded=$((succeeded + 1))
             echo "${prefix}-pushed=false" >> "$GITHUB_OUTPUT"
             return 0
           fi
@@ -160,7 +164,6 @@ runs:
           if docker push "$ref"; then
             echo "${prefix}-pushed=true" >> "$GITHUB_OUTPUT"
             echo "${prefix}-image-ref=${ref}" >> "$GITHUB_OUTPUT"
-            succeeded=$((succeeded + 1))
             [ -z "$primary_ref" ] && primary_ref="$ref"
           else
             echo "${prefix}-pushed=false" >> "$GITHUB_OUTPUT"
@@ -168,8 +171,8 @@ runs:
           fi
         }
 
-        push_registry ghcr "$GHCR_IMAGE" "$GHCR_USERNAME" "$GHCR_PASSWORD" ghcr
-        push_registry dockerhub "$DOCKERHUB_IMAGE" "$DOCKERHUB_USERNAME" "$DOCKERHUB_PASSWORD" dockerhub
+        push_registry "$GHCR_IMAGE" "$GHCR_USERNAME" "$GHCR_PASSWORD" ghcr
+        push_registry "$DOCKERHUB_IMAGE" "$DOCKERHUB_USERNAME" "$DOCKERHUB_PASSWORD" dockerhub
 
         if [ "$configured" -eq 0 ]; then
           echo "No registries configured" >&2

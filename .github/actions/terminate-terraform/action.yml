@@ -1,5 +1,5 @@
 name: 'Terminate Terraform'
-description: 'Destroy resources from state using workflows-repo pr-destroy module and delete S3 state'
+description: 'Destroy resources from state using bundled pr-destroy module and delete S3 state'
 inputs:
   backend-key:
     description: 'S3 state key to destroy and delete'
@@ -20,10 +20,6 @@ inputs:
     description: 'Multiline KEY=value Terraform variables if required'
     required: false
     default: ''
-  workflows-ref:
-    description: 'Ref of densestvoid/workflows to load pr-destroy module'
-    required: false
-    default: 'main'
 outputs:
   destroyed:
     description: 'true on successful destroy'
@@ -34,15 +30,6 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Checkout pr-destroy module
-      uses: actions/checkout@v4
-      with:
-        repository: densestvoid/workflows
-        ref: ${{ inputs.workflows-ref }}
-        path: _workflows
-        sparse-checkout-cone-mode: false
-        sparse-checkout: .github/terraform/pr-destroy
-
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
       with:
@@ -59,16 +46,18 @@ runs:
         AWS_SECRET_ACCESS_KEY: ${{ inputs.terraform-aws-secret-access-key }}
         AWS_REGION: ${{ inputs.terraform-aws-region }}
         VARIABLES: ${{ inputs.variables }}
+        PR_DESTROY_DIR: ${{ github.action_path }}/pr-destroy
       run: |
         set -euo pipefail
-        cd _workflows/.github/terraform/pr-destroy
+        cd "$PR_DESTROY_DIR"
 
-        VAR_ARGS=(-var "do_token=${DO_TOKEN}")
-        while IFS= read -r line; do
+        rm -f ci.auto.tfvars
+        printf 'do_token = "%s"\n' "$(printf '%s' "$DO_TOKEN" | sed 's/"/\\"/g')" >> ci.auto.tfvars
+        while IFS= read -r line || [ -n "$line" ]; do
           [ -z "$line" ] && continue
           key="${line%%=*}"
           val="${line#*=}"
-          VAR_ARGS+=(-var "${key}=${val}")
+          printf '%s = "%s"\n' "$key" "$(printf '%s' "$val" | sed 's/"/\\"/g')" >> ci.auto.tfvars
         done <<< "$VARIABLES"
 
         terraform init \
@@ -76,10 +65,13 @@ runs:
           -backend-config="region=${AWS_REGION}"
 
         if terraform state list 2>/dev/null | grep -q .; then
-          terraform apply -auto-approve "${VAR_ARGS[@]}"
+          terraform apply -auto-approve
         fi
 
-        aws s3 rm "s3://densestvoid-terraform/${BACKEND_KEY}" || true
+        STATE_DELETED=false
+        if aws s3 rm "s3://densestvoid-terraform/${BACKEND_KEY}"; then
+          STATE_DELETED=true
+        fi
 
         echo "destroyed=true" >> "$GITHUB_OUTPUT"
-        echo "state-deleted=true" >> "$GITHUB_OUTPUT"
+        echo "state-deleted=${STATE_DELETED}" >> "$GITHUB_OUTPUT"

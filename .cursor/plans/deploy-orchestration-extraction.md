@@ -143,11 +143,12 @@ Examples:
 | `working-directory` | Go module root |
 | `content-key` | From **detect-changes** (or caller) |
 | `main-package` | Package path to build (e.g. `./cmd/server`) |
-| `artifact-name` | Optional. Default: **basename of `main-package`** (e.g. `./cmd/server` → `server`) |
+| `artifact-name` | Optional. Output **path** within artifact (e.g. `budget`, `bin/server`). Default: basename of `main-package` |
 
 | Output | Purpose |
 |--------|---------|
-| `artifact-name` | Resolved artifact name (default or override) |
+| `artifact-name` | Upload name for downstream download (`/` → `-`) |
+| `artifact-path` | Path of the binary inside the artifact |
 
 Whether to call **build-go** at all (e.g. when sources unchanged) is a **caller `if:`** decision — not an action input.
 
@@ -264,7 +265,7 @@ Destroy from existing state using the **workflows-repo** `pr-destroy` empty modu
 | `destroyed` | `true` on success |
 | `state-deleted` | `true` when S3 state file removed |
 
-**Checkout:** Workflows-repo `terraform/pr-destroy` module only.
+**Checkout:** Bundled `pr-destroy` module at `${{ github.action_path }}/pr-destroy` — no separate repo checkout.
 
 ---
 
@@ -459,9 +460,8 @@ densestvoid/workflows/
 │   │   ├── push-container/
 │   │   ├── deploy-terraform/
 │   │   ├── terminate-terraform/
+│   │   │   └── pr-destroy/
 │   │   └── notify/
-│   └── terraform/
-│       └── pr-destroy/
 └── README.md
 ```
 

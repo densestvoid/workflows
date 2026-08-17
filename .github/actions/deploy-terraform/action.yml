@@ -31,12 +31,8 @@ outputs:
 runs:
   using: 'composite'
   steps:
-    - name: Checkout Terraform module
+    - name: Checkout repository
       uses: actions/checkout@v4
-      with:
-        sparse-checkout-cone-mode: false
-        sparse-checkout: |
-          ${{ inputs.terraform-dir }}
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v3
@@ -59,22 +55,22 @@ runs:
         set -euo pipefail
         cd "$TF_DIR"
 
-        VAR_ARGS=()
+        rm -f ci.auto.tfvars
         if [ -n "$DO_TOKEN" ]; then
-          VAR_ARGS+=(-var "do_token=${DO_TOKEN}")
+          printf 'do_token = "%s"\n' "$(printf '%s' "$DO_TOKEN" | sed 's/"/\\"/g')" >> ci.auto.tfvars
         fi
-        while IFS= read -r line; do
+        while IFS= read -r line || [ -n "$line" ]; do
           [ -z "$line" ] && continue
           key="${line%%=*}"
           val="${line#*=}"
-          VAR_ARGS+=(-var "${key}=${val}")
+          printf '%s = "%s"\n' "$key" "$(printf '%s' "$val" | sed 's/"/\\"/g')" >> ci.auto.tfvars
         done <<< "$VARIABLES"
 
         terraform init \
           -backend-config="key=${BACKEND_KEY}" \
           -backend-config="region=${AWS_REGION}"
 
-        terraform apply -auto-approve "${VAR_ARGS[@]}"
+        terraform apply -auto-approve
 
         OUTPUTS=$(terraform output -json)
         {

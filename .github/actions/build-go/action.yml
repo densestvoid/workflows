@@ -12,13 +12,16 @@ inputs:
     description: 'Package path to build (e.g. ./cmd/server)'
     required: true
   artifact-name:
-    description: 'Artifact name (default: basename of main-package)'
+    description: 'Output path and artifact name (e.g. budget, bin/server). Default: basename of main-package'
     required: false
     default: ''
 outputs:
   artifact-name:
-    description: 'Uploaded artifact name'
+    description: 'Artifact name for downstream download (slashes replaced with dashes)'
     value: ${{ steps.meta.outputs.artifact-name }}
+  artifact-path:
+    description: 'Output path of the binary within the artifact'
+    value: ${{ steps.meta.outputs.artifact-path }}
 runs:
   using: 'composite'
   steps:
@@ -28,11 +31,13 @@ runs:
       run: |
         set -euo pipefail
         MAIN_PACKAGE="${{ inputs.main-package }}"
-        ARTIFACT_NAME="${{ inputs.artifact-name }}"
-        if [ -z "$ARTIFACT_NAME" ]; then
-          ARTIFACT_NAME=$(basename "$MAIN_PACKAGE")
+        ARTIFACT_PATH="${{ inputs.artifact-name }}"
+        if [ -z "$ARTIFACT_PATH" ]; then
+          ARTIFACT_PATH=$(basename "$MAIN_PACKAGE")
         fi
-        echo "artifact-name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
+        UPLOAD_NAME=$(printf '%s' "$ARTIFACT_PATH" | tr '/' '-')
+        echo "artifact-path=${ARTIFACT_PATH}" >> "$GITHUB_OUTPUT"
+        echo "artifact-name=${UPLOAD_NAME}" >> "$GITHUB_OUTPUT"
         echo "main-package=${MAIN_PACKAGE}" >> "$GITHUB_OUTPUT"
 
     - name: Checkout Go sources
@@ -52,10 +57,9 @@ runs:
 
     - name: Restore binary cache
       uses: actions/cache@v4
-      id: binary-cache
       with:
         path: ${{ runner.temp }}/build-go-${{ steps.meta.outputs.artifact-name }}
-        key: build-go-${{ inputs.content-key }}-${{ steps.meta.outputs.main-package }}-${{ runner.os }}
+        key: build-go-${{ inputs.content-key }}-${{ steps.meta.outputs.main-package }}-${{ steps.meta.outputs.artifact-path }}-${{ runner.os }}
         restore-keys: |
           build-go-${{ inputs.content-key }}-
 
@@ -63,22 +67,22 @@ runs:
       shell: bash
       working-directory: ${{ inputs.working-directory }}
       env:
-        ARTIFACT_NAME: ${{ steps.meta.outputs.artifact-name }}
+        ARTIFACT_PATH: ${{ steps.meta.outputs.artifact-path }}
         MAIN_PACKAGE: ${{ steps.meta.outputs.main-package }}
-        BINARY_PATH: ${{ runner.temp }}/build-go-${{ steps.meta.outputs.artifact-name }}
+        CACHE_BINARY: ${{ runner.temp }}/build-go-${{ steps.meta.outputs.artifact-name }}
       run: |
         set -euo pipefail
-        mkdir -p bin
+        mkdir -p "$(dirname "$ARTIFACT_PATH")"
 
-        if [ ! -f "$BINARY_PATH" ]; then
-          CGO_ENABLED=0 GOOS=linux go build -o "$BINARY_PATH" "$MAIN_PACKAGE"
+        if [ ! -f "$CACHE_BINARY" ]; then
+          CGO_ENABLED=0 GOOS=linux go build -o "$CACHE_BINARY" "$MAIN_PACKAGE"
         fi
 
-        cp "$BINARY_PATH" "bin/${ARTIFACT_NAME}"
+        cp "$CACHE_BINARY" "$ARTIFACT_PATH"
 
     - name: Upload binary artifact
       uses: actions/upload-artifact@v4
       with:
         name: ${{ steps.meta.outputs.artifact-name }}
-        path: ${{ inputs.working-directory == '.' && format('bin/{0}', steps.meta.outputs.artifact-name) || format('{0}/bin/{1}', inputs.working-directory, steps.meta.outputs.artifact-name) }}
+        path: ${{ inputs.working-directory == '.' && steps.meta.outputs.artifact-path || format('{0}/{1}', inputs.working-directory, steps.meta.outputs.artifact-path) }}
         if-no-files-found: error
