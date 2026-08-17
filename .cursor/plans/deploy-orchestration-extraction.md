@@ -19,7 +19,7 @@ app repo     = assembly instructions
 Example compositions (app-defined):
 
 ```
-go-build-key → Go Checks (skip when unchanged)
+detect-go-changes → Go Checks (skip when unchanged)
 Deploy Gate → build.yml → Deploy Terraform → prepare-notify → Notify
 Deploy Gate → build.yml → Release CLI → prepare-notify → Notify
 Deploy Gate → Build Docker → Push Container → Notify   # image to registry only
@@ -48,18 +48,19 @@ When `budget` or `krogerrecipeshopper` calls something in `densestvoid/workflows
 
 So “configure `DO_TOKEN` once in workflows repo” does **not** work for app repos calling workflows actions/workflows cross-repo. That was the implicit assumption behind “workflows-repo secrets + composite actions” — it only applies to workflows that **run inside the workflows repo itself**.
 
-### Recommended secret model (simplest sharing)
+### Secret model — repo-level only (no org secrets for now)
 
-| Layer | What | Why |
-|-------|------|-----|
-| **Organization secrets** | `DO_TOKEN`, `TERRAFORM_AWS_S3_*` | Configure once; every app repo sees them via `${{ secrets.DO_TOKEN }}` without per-repo duplication |
-| **App repo secrets** | Slack webhooks, registry creds (`DOCKERHUB_*`), app tokens | App-specific; not shared |
-| **App repo variables** | `PRODUCTION_DOMAIN`, non-secret config | App-specific |
-| **GitHub Environment** (`termination-delay`) | Terminate job delay only | Per-environment gate in app repo |
+Everything that needs to be a secret or variable lives in the **app repo** (repository secrets/variables, or GitHub Environment where applicable). No migration to organization-level secrets at this time.
 
-**Deploy Terraform** and **Terminate Terraform** accept infra secrets as **optional action inputs**. App template passes `${{ secrets.DO_TOKEN }}` once — backed by org secrets so individual repos don’t maintain copies.
+| Layer | What |
+|-------|------|
+| **App repo secrets** | `DO_TOKEN`, `TERRAFORM_AWS_S3_*`, Slack webhooks, registry creds (`DOCKERHUB_*`), app tokens |
+| **App repo variables** | `PRODUCTION_DOMAIN`, non-secret config |
+| **GitHub Environment** (`termination-delay`) | Terminate job delay only |
 
-Use **composite actions** for all v0 steps. Reserve reusable workflows only if a future step truly needs multi-job orchestration inside the toolbox (none identified for v0).
+**Deploy Terraform** and **Terminate Terraform** accept infra credentials as **action inputs** — caller passes `${{ secrets.* }}` from that app repo’s own secret store. Duplication across repos is accepted for now; the app-deploy-template documents the required secret names once.
+
+Workflows-repo repository secrets are **not** visible to cross-repo callers anyway (see above). Composite actions for all v0 steps.
 
 **Rejected:** Central `workflow_dispatch` runner in workflows repo (black box; needs broad repo access).
 
@@ -71,7 +72,7 @@ Use **composite actions** for all v0 steps. Reserve reusable workflows only if a
 
 | Name | Directory | Purpose |
 |------|-----------|---------|
-| **go-build-key** | `go-build-key/` | Composable pre-CI check: content-hash / change detection; skip signal for Go Checks and build |
+| **Detect Go Changes** | `detect-go-changes/` | Composable pre-CI check: Go source diff + content hash; skip signal for Go Checks and build |
 | **Build Go** | `build-go/` | Cached Go binary build; content-hash skip logic; **no Docker awareness** |
 | **Build Docker** | `build-docker/` | Local `docker buildx` only; receives binary via **artifact** |
 | **Push Container** | `push-container/` | Push to all configured registries in one step (Notify-style multiplex) |
@@ -84,13 +85,13 @@ Future steps (same composable pattern): **Release CLI**, **Deploy Static**, etc.
 
 **Removed:** **Write Tfvars**, full orchestrator workflows, `workflow_dispatch` central runner, **establish VPC** (VPC is app Terraform logic — erroneously included in an earlier rollout draft; not workflows-repo scope).
 
-**Existing:** **Go Checks** reusable workflow (`go-checks.yml`) — stays as-is; pairs with **go-build-key** in app repos.
+**Existing:** **Go Checks** reusable workflow (`go-checks.yml`) — stays as-is; pairs with **detect-go-changes** in app repos.
 
 ---
 
 ## Per-action contracts
 
-### go-build-key
+### Detect Go Changes (`detect-go-changes`)
 
 Composable pre-CI step. Expect more checks in this family (lint skip, docs skip, etc.) — keep each as a separate composable action.
 
@@ -101,10 +102,10 @@ Composable pre-CI step. Expect more checks in this family (lint skip, docs skip,
 
 | Output | Purpose |
 |--------|---------|
-| `go_sources_changed` | `true` when Go sources changed vs base |
-| `go_build_key` | Content hash for cache/skip decisions (**owned here**, not Build Go) |
+| `changed` | `true` when Go sources changed vs base |
+| `build-key` | Content hash for cache/skip decisions (**owned here**, not Build Go) |
 
-**Checkout:** Thin — only what’s needed to compute the hash (sparse paths: `go.mod`, `go.sum`, `**/*.go` under working directory). Own checkout; caller does not pre-checkout.
+**Checkout:** Sparse — `go.mod`, `go.sum`, and `**/*.go` under working directory only. No other paths. Own checkout; caller does not pre-checkout.
 
 ---
 
@@ -115,7 +116,7 @@ Composable pre-CI step. Expect more checks in this family (lint skip, docs skip,
 | Input | Purpose |
 |-------|---------|
 | `working-directory` | Go module root |
-| `go-build-key` | Cache key from **go-build-key** (or caller) |
+| `build-key` | Cache key from **detect-go-changes** (or caller) |
 | `binary-name` | Output binary name |
 | `main-package` | Package path to build |
 | `skip` | Skip build when cache hit |
@@ -200,13 +201,7 @@ Encapsulates its own checkout so callers don’t need git history for gating.
 |--------|---------|
 | `should-deploy` | `true` when deployable paths changed vs base |
 
-**Checkout:** `fetch-depth: 0` (full history).
-
-#### Why `fetch-depth: 0`?
-
-Default checkout is a shallow clone (`fetch-depth: 1`) — only the latest commit. **Deploy Gate** compares the current ref to `main` via merge-base / path diff. That requires enough history to find the fork point. `fetch-depth: 0` fetches full history so `git merge-base` and path diffs work reliably. Without it, gate logic can false-positive or false-negative on PRs with more than one commit.
-
-**Optimization:** Sparse checkout of deployable paths only (not the whole repo) once paths are known.
+**Checkout:** Sparse — only the `paths` globs. Fetch the minimum git history needed for merge-base against `base-ref` (may require deeper fetch than `fetch-depth: 1`, but never checks out unrelated paths or files). Principle: **exactly what this action needs, no more** — not a full-repo clone.
 
 ---
 
@@ -214,13 +209,13 @@ Default checkout is a shallow clone (`fetch-depth: 1`) — only the latest commi
 
 Variables as **action inputs** (`with:`), not caller-defined `env: TF_VAR_*`. The action maps inputs → Terraform variables internally. Avoids env-var boilerplate on every caller step.
 
-Infra secrets (`do-token`, `terraform-aws-s3-*`) are **optional action inputs** — caller passes org secrets once.
+Infra secrets (`do-token`, `terraform-aws-s3-*`) are **action inputs** — caller passes from that repo’s secrets.
 
 | Input | Purpose |
 |-------|---------|
 | `terraform-dir` | Path to Terraform root module |
 | `backend-key` | S3 state key (bucket `densestvoid-terraform` is internal constant) |
-| `do-token` | DigitalOcean API token (org secret, passed by caller) |
+| `do-token` | DigitalOcean API token (repo secret, passed by caller) |
 | `terraform-aws-access-key-id` | S3 backend credentials |
 | `terraform-aws-secret-access-key` | S3 backend credentials |
 | `terraform-aws-region` | S3 backend region |
@@ -293,41 +288,41 @@ Separate jobs in app repos:
 Build Go → Build Docker → Push Container → Deploy Terraform
 ```
 
-Caller uses **go-build-key** / **Push Container** `exists` for skip logic. When `exists == true`, skip Build Go, Build Docker, and push — go straight to deploy.
+Caller uses **detect-go-changes** / **Push Container** `exists` for skip logic. When `exists == true`, skip Build Go, Build Docker, and push — go straight to deploy.
 
 ### Typical composition in app `build.yml`
 
 ```yaml
 steps:
-  - uses: densestvoid/workflows/.github/actions/go-build-key@go-build-key-v1
-    id: key
+  - uses: densestvoid/workflows/.github/actions/detect-go-changes@v1
+    id: changes
 
-  - uses: densestvoid/workflows/.github/actions/push-container@push-container-v1
+  - uses: densestvoid/workflows/.github/actions/push-container@v1
     id: check
     with:
       local-tag: my-app:local
-      tag: pr-123-${{ steps.key.outputs.go-build-key }}
+      tag: pr-123-${{ steps.changes.outputs.build-key }}
       check-only: true
       ghcr-image: ${{ github.repository }}/my-app
       ghcr-username: ${{ github.actor }}
       ghcr-password: ${{ secrets.GITHUB_TOKEN }}
 
-  - uses: densestvoid/workflows/.github/actions/build-go@build-go-v1
+  - uses: densestvoid/workflows/.github/actions/build-go@v1
     if: steps.check.outputs.exists != 'true'
     with:
-      go-build-key: ${{ steps.key.outputs.go-build-key }}
+      build-key: ${{ steps.changes.outputs.build-key }}
 
-  - uses: densestvoid/workflows/.github/actions/build-docker@build-docker-v1
+  - uses: densestvoid/workflows/.github/actions/build-docker@v1
     if: steps.check.outputs.exists != 'true'
     with:
       binary-artifact: ${{ steps.build-go.outputs.artifact-name }}
       local-tag: my-app:local
 
-  - uses: densestvoid/workflows/.github/actions/push-container@push-container-v1
+  - uses: densestvoid/workflows/.github/actions/push-container@v1
     if: steps.check.outputs.exists != 'true'
     with:
       local-tag: my-app:local
-      tag: pr-123-${{ steps.key.outputs.go-build-key }}
+      tag: pr-123-${{ steps.changes.outputs.build-key }}
       ghcr-image: ${{ github.repository }}/my-app
       ghcr-username: ${{ github.actor }}
       ghcr-password: ${{ secrets.GITHUB_TOKEN }}
@@ -340,15 +335,15 @@ steps:
 
 ## Checkout convention
 
-**Every action checks out only what it needs** — thin, fast, encapsulated. Callers should not pre-checkout for actions.
+**Every action checks out exactly what it needs — no more.** Sparse paths, minimum history, no full-repo clones. Callers should not pre-checkout for actions.
 
 | Action | Checkout scope |
 |--------|----------------|
-| go-build-key | Go sources for hashing |
-| Build Go | Go sources + module files |
-| Build Docker | Dockerfile + context + binary artifact |
+| detect-go-changes | `go.mod`, `go.sum`, `**/*.go` under working directory |
+| Build Go | Go sources + module files for build |
+| Build Docker | Dockerfile + context files + binary artifact |
 | Push Container | None |
-| Deploy Gate | Full history (`fetch-depth: 0`), sparse deployable paths |
+| Deploy Gate | Sparse: deployable `paths` only; minimum history for merge-base |
 | Deploy Terraform | `terraform-dir` only |
 | Terminate Terraform | `terraform-dir` + destroy module ref |
 | Notify | None |
@@ -361,24 +356,47 @@ Existing **setup** action does full checkout today — acceptable for Go Checks;
 
 | Layer | v0 step |
 |-------|---------|
-| **CI go-checks** | **go-build-key** → `go_sources_changed` |
+| **CI go-checks** | **detect-go-changes** → `changed` |
 | **PR deploy gate** | **Deploy Gate** → `should-deploy` |
 | **Go binary** | **Build Go** content-hash cache |
 | **Docker image** | **Push Container** `exists`; caller skips build when true |
 
 ---
 
-## Versioning — per-action tags
+## Versioning
 
-**Decision:** Each action gets its own version tag, not one monolithic `@v0` / `@v1` for the whole repo.
+**Action directory names have no version** — always `build-go`, `deploy-terraform`, etc. Version lives only in the **git ref** (`@…`), which is standard GitHub Actions practice.
 
-Examples:
-- `densestvoid/workflows/.github/actions/build-go@build-go-v1`
-- `densestvoid/workflows/.github/actions/deploy-terraform@deploy-terraform-v1`
+### Default: coupled repo tags
 
-During v0 iteration, use moving tags (`@build-go-v0`) or branch pins (`@main`) until kroger validation passes, then cut stable `*-v1` tags per action.
+Pin every action at the same repo ref. One tag = one tested snapshot of the whole toolbox.
 
-**Go Checks** reusable workflow keeps its own pin (e.g. `@go-checks-v1`).
+```yaml
+uses: densestvoid/workflows/.github/actions/build-go@v1
+uses: densestvoid/workflows/.github/actions/deploy-terraform@v1
+```
+
+Both `@v1` resolve to the **same commit**. Bump all pins together when releasing. Simple, conventional, no redundant naming.
+
+| Ref | When |
+|-----|------|
+| `@main` | v0 iteration / bleeding edge |
+| `@v1`, `@v2` | Stable releases (major = breaking change to any action) |
+| `@<sha>` | Pin to exact commit for debugging |
+
+### Escape hatch: independent per-action versions
+
+If one action needs to ship a fix without cutting a full toolbox release, use **namespaced git tags** — version in the ref, not the directory:
+
+```yaml
+uses: densestvoid/workflows/.github/actions/deploy-terraform@deploy-terraform/v1.1.0
+```
+
+Tag `deploy-terraform/v1.1.0` points at a commit; only callers of that action need to update. Avoid `@build-go-v1` style tags — redundant with the path and awkward to read.
+
+**Rejected:** Version baked into action directory names (`build-go-v1/`); version repeated in tag and path (`@build-go-v1`).
+
+**Go Checks** reusable workflow: `uses: densestvoid/workflows/.github/workflows/go-checks.yml@v1` (same coupled ref).
 
 ---
 
@@ -388,7 +406,7 @@ During v0 iteration, use moving tags (`@build-go-v0`) or branch pins (`@main`) u
 |-------|-------|---------------|
 | **v0** | Build composable actions in workflows repo | `workflows` |
 | **v0 test** | Validate composition with **krogerrecipeshopper** (Go + Terraform; deployment details TBD — likely very similar to budget post-migration) | `workflows`, `krogerrecipeshopper` |
-| **v1** | Per-action `*-v1` tags; create `densestvoid/app-deploy-template` GitHub template repo | `workflows`, `app-deploy-template` |
+| **v1** | Cut `@v1` repo tag; create `densestvoid/app-deploy-template` GitHub template repo | `workflows`, `app-deploy-template` |
 | **v1 migrate** | Update **budget** to composed steps | `budget` |
 
 **Budget is last** — not touched during v0 iteration. **Krogerrecipeshopper** is the proving ground.
@@ -404,7 +422,7 @@ During v0 iteration, use moving tags (`@build-go-v0`) or branch pins (`@main`) u
 Separate repo: `densestvoid/app-deploy-template`
 
 - Enable **Settings → Template repository**
-- Example compositions calling per-action version pins
+- Example compositions pinned at `@v1`
 - `gh repo create my-app --template densestvoid/app-deploy-template`
 
 Workflows repo stays actions-only — no template files inside it.
@@ -421,7 +439,7 @@ densestvoid/workflows/
 │   ├── actions/
 │   │   ├── setup/
 │   │   ├── install-tool/
-│   │   ├── go-build-key/
+│   │   ├── detect-go-changes/
 │   │   ├── build-go/
 │   │   ├── build-docker/
 │   │   ├── push-container/
@@ -442,7 +460,7 @@ densestvoid/workflows/
 jobs:
   gate:
     steps:
-      - uses: densestvoid/workflows/.github/actions/deploy-gate@deploy-gate-v1
+      - uses: densestvoid/workflows/.github/actions/deploy-gate@v1
         with:
           paths: |
             terraform/**
@@ -451,12 +469,12 @@ jobs:
   build:
     needs: gate
     if: needs.gate.outputs.should-deploy == 'true'
-  # ... build.yml: go-build-key → push-container check → build-go → build-docker → push-container
+  # ... build.yml: detect-go-changes → push-container check → build-go → build-docker → push-container
 
   deploy:
     needs: build
     steps:
-      - uses: densestvoid/workflows/.github/actions/deploy-terraform@deploy-terraform-v1
+      - uses: densestvoid/workflows/.github/actions/deploy-terraform@v1
         with:
           terraform-dir: terraform/pr
           backend-key: pr/pr-${{ github.event.pull_request.number }}.tfstate
@@ -473,7 +491,7 @@ jobs:
     needs: [gate, build, deploy]
     if: always()
     steps:
-      - uses: densestvoid/workflows/.github/actions/notify@notify-v1
+      - uses: densestvoid/workflows/.github/actions/notify@v1
         with:
           slack-webhook: ${{ secrets.SLACK_WEBHOOK }}
           slack-text: ${{ needs.build.outputs.notify-slack-text }}
@@ -504,11 +522,12 @@ PR #21 (independent). Budget migration deferred until v1 after krogerrecipeshopp
 | Approach | Why |
 |----------|-----|
 | **Write Tfvars** / JSON-only variable maps | Action inputs + optional `variables` block; complex types in Terraform HCL |
-| **Build Go knows docker_build_key** | Hash owned by **go-build-key**; binary via artifacts |
-| **Workflows repo secrets for cross-repo deploy** | Caller `secrets` context only; use **org secrets** instead |
+| **Build Go knows docker_build_key** | Hash owned by **detect-go-changes**; binary via artifacts |
+| **Workflows repo secrets for cross-repo deploy** | Caller `secrets` context only; secrets live in each app repo |
+| **Organization secrets** | Not using org-level secrets at this time |
 | Build steps know about Terraform | **Build Docker** / **Push Container** are registry/build only |
 | Full orchestrator workflows in workflows repo | Too thick; apps compose steps |
 | `workflow_dispatch` central runner | Black box |
 | Budget-first migration | Krogerrecipeshopper validates v0 first |
 | **Establish VPC in workflows repo** | App Terraform concern; erroneously pulled into rollout draft |
-| Monolithic `@v1` for all actions | Per-action version tags |
+| Version in action directory or tag name (`@build-go-v1`) | Version in git ref only (`@v1` or `deploy-terraform/v1.1.0`) |
