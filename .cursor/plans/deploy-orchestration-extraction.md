@@ -61,18 +61,23 @@ Future steps (same composable pattern): **Release CLI**, **Deploy Static**, etc.
 
 ### Push Container
 
-- Pushes a locally built image to a **caller-chosen registry**
-- Inputs: `registry` (`ghcr.io`, `docker.io`, …), `image`, `tag`
-- Confirm-if-exists: `docker manifest inspect` — skip push when tag already in registry (preserves budget's skip behavior)
-- Outputs: `image_ref`, `pushed` (bool), `exists` (bool)
-- Auth: caller provides credentials via env (`GITHUB_TOKEN` for GHCR, `DOCKERHUB_TOKEN`, etc.); action documents per-registry requirements
+Single action, **multiplexed by registry** — same pattern as **Notify** (one step, caller supplies what's needed).
+
+- **Inputs:** `registry`, `image`, `tag`, `check_only` (optional)
+- **Credentials:** caller passes **all** auth — no built-in secret names or registry-specific assumptions inside the action
+  - `registry_username` — input or env
+  - `registry_password` — input or env (token/password; masked)
+- **Behavior:** `docker login` → optional `manifest inspect` (skip if exists) → tag → push
+- **Outputs:** `image_ref`, `pushed`, `exists`
+- Works with any registry `docker login` supports (GHCR, Docker Hub, etc.) — caller chooses registry and credentials
 - **No Terraform, no build**
+
+Registries that need non-Docker auth (ECR, GAR) are out of scope for v0 — caller handles custom login before **Push Container**, or a future specialized step is added.
 
 ### Typical composition in app `build.yml`
 
 ```yaml
 steps:
-  # Optional: check remote first to skip build when image already published
   - uses: densestvoid/workflows/.github/actions/push-container@v0
     id: check
     with:
@@ -80,6 +85,8 @@ steps:
       image: ${{ github.repository }}/my-app
       tag: pr-123-${{ steps.hash.outputs.docker_build_key }}
       check_only: true
+      registry_username: ${{ github.actor }}
+      registry_password: ${{ secrets.GITHUB_TOKEN }}
 
   - uses: densestvoid/workflows/.github/actions/build-go@v0
     if: steps.check.outputs.exists != 'true'
@@ -93,6 +100,13 @@ steps:
       registry: ghcr.io
       image: ${{ github.repository }}/my-app
       tag: pr-123-${{ steps.hash.outputs.docker_build_key }}
+      registry_username: ${{ github.actor }}
+      registry_password: ${{ secrets.GITHUB_TOKEN }}
+
+# Docker Hub example — same action, different credentials:
+#   registry: docker.io
+#   registry_username: ${{ secrets.DOCKERHUB_USERNAME }}
+#   registry_password: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
 
 Caller can omit **Push Container** entirely (build only), run **Push Container** twice to different registries, or skip **Build Docker** if pushing a pre-built image.
@@ -158,7 +172,7 @@ Committed defaults live in the app repo as `*.auto.tfvars` or `variables.tf` def
 |-------|--------------|---------|
 | **PR deploy gate** | Skip when no deployable changes | **Deploy Gate** |
 | **Go binary** | Content-hash cache | **Build Go** |
-| **Docker image** | Content-hash tag; confirm-or-build | **Build Docker** |
+| **Docker image** | Content-hash tag; skip push when manifest exists in registry | **Push Container** (confirm-if-exists); caller skips **Build Docker** when `exists` |
 | **CI go-checks** | Skip when Go unchanged | **Build Go** → `go_sources_changed` |
 
 ---
@@ -274,7 +288,7 @@ PR #21 (independent). Budget migration deferred until v1 after krogerrecipeshopp
 | Approach | Why |
 |----------|-----|
 | **Write Tfvars** / JSON variable maps | Callers pass `env: TF_VAR_*` per variable; complex types built in Terraform HCL |
-| Build Docker knows about Terraform | Registry push only; caller wires deploy separately |
+| Build steps know about Terraform | **Build Docker** / **Push Container** are registry/build only |
 | Full orchestrator workflows in workflows repo | Too thick; apps compose steps |
 | `workflow_dispatch` central runner | Black box |
 | Budget-first migration | Krogerrecipeshopper validates v0 first |
