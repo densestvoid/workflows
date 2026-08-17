@@ -33,7 +33,8 @@ Deploy Gate → Build Docker → Push Container → Notify   # image to registry
 | Name | Directory | Purpose |
 |------|-----------|---------|
 | **Build Go** | `build-go/` | Cached Go binary build; content-hash skip logic embedded |
-| **Build Docker** | `build-docker/` | Cached container push to registry; confirm-or-build; **no Terraform/tfvars knowledge** |
+| **Build Docker** | `build-docker/` | Build container image locally (`docker buildx`); outputs local tag — **no registry, no push** |
+| **Push Container** | `push-container/` | Push an image to a container registry; confirm-if-exists skip; caller chooses registry |
 | **Deploy Gate** | `deploy-gate/` | Deployable path diff vs `main` |
 | **Deploy Terraform** | `deploy-terraform/` | Terraform init + apply; variables passed as inputs |
 | **Terminate Terraform** | `terminate-terraform/` | Terraform destroy from state (`pr-destroy` pattern) |
@@ -47,24 +48,54 @@ Future steps (same composable pattern): **Release CLI**, **Deploy Static**, etc.
 
 ---
 
-## Build Docker — push to a container registry (caller chooses which)
+## Build Docker + Push Container — separate steps
 
-**Build Docker** must not know about Terraform or deployment. It only:
+**Yes — split build and push.** Building an image and publishing it to a registry are different operations with different inputs, auth, and skip logic.
 
-- Confirms or builds and pushes a container image
-- Outputs: `image_ref`, `image_tag` (and optionally digest)
+### Build Docker
 
-**Registry is an input, not a assumption.** The caller specifies where the image goes:
+- Runs `docker buildx build` (load to local daemon or `--output type=docker`)
+- Inputs: `context`, `dockerfile`, `tags` (local tag), optional binary artifact from **Build Go**
+- Outputs: `image_tag`, `docker_build_key` (content hash for cache/skip decisions)
+- **No registry, no push, no Terraform**
 
-| Input | Example | Notes |
-|-------|---------|-------|
-| `registry` | `ghcr.io`, `docker.io` | Where to push |
-| `image` | `owner/repo/my-app` | Image path without registry or tag |
-| `image_tag` | `pr-123-abc123` | Often from content hash or caller |
+### Push Container
 
-Example targets: GHCR (`ghcr.io`), Docker Hub (`docker.io`), any registry `docker login` supports. Auth is the caller's responsibility (`GITHUB_TOKEN` for GHCR, `DOCKERHUB_TOKEN` in app secrets for Docker Hub, etc.) — **Build Docker** documents required credentials per registry.
+- Pushes a locally built image to a **caller-chosen registry**
+- Inputs: `registry` (`ghcr.io`, `docker.io`, …), `image`, `tag`
+- Confirm-if-exists: `docker manifest inspect` — skip push when tag already in registry (preserves budget's skip behavior)
+- Outputs: `image_ref`, `pushed` (bool), `exists` (bool)
+- Auth: caller provides credentials via env (`GITHUB_TOKEN` for GHCR, `DOCKERHUB_TOKEN`, etc.); action documents per-registry requirements
+- **No Terraform, no build**
 
-The caller decides what happens after push — **Deploy Terraform**, a release step, or nothing.
+### Typical composition in app `build.yml`
+
+```yaml
+steps:
+  # Optional: check remote first to skip build when image already published
+  - uses: densestvoid/workflows/.github/actions/push-container@v0
+    id: check
+    with:
+      registry: ghcr.io
+      image: ${{ github.repository }}/my-app
+      tag: pr-123-${{ steps.hash.outputs.docker_build_key }}
+      check_only: true
+
+  - uses: densestvoid/workflows/.github/actions/build-go@v0
+    if: steps.check.outputs.exists != 'true'
+
+  - uses: densestvoid/workflows/.github/actions/build-docker@v0
+    if: steps.check.outputs.exists != 'true'
+
+  - uses: densestvoid/workflows/.github/actions/push-container@v0
+    if: steps.check.outputs.exists != 'true'
+    with:
+      registry: ghcr.io
+      image: ${{ github.repository }}/my-app
+      tag: pr-123-${{ steps.hash.outputs.docker_build_key }}
+```
+
+Caller can omit **Push Container** entirely (build only), run **Push Container** twice to different registries, or skip **Build Docker** if pushing a pre-built image.
 
 ---
 
@@ -179,6 +210,7 @@ densestvoid/workflows/
 │       ├── install-tool/
 │       ├── build-go/
 │       ├── build-docker/
+│       ├── push-container/
 │       ├── deploy-gate/
 │       ├── deploy-terraform/
 │       ├── terminate-terraform/
@@ -197,7 +229,7 @@ jobs:
 
   build:
     needs: gate
-    uses: ./.github/workflows/build.yml    # Build Go + Build Docker; outputs image_tag
+    uses: ./.github/workflows/build.yml    # Build Go + Build Docker + Push Container; outputs image_tag
 
   deploy:
     needs: build
