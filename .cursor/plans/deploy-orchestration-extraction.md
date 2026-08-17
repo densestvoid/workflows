@@ -52,8 +52,8 @@ Workflows-repo repository secrets are **not** visible to cross-repo callers anyw
 | Name | Directory | Purpose |
 |------|-----------|---------|
 | **Detect Changes** | `detect-changes/` | Composable pre-CI check: path-pattern diff + content hash; skip signal for CI and build |
-| **Build Go** | `build-go/` | Cached Go binary build; **no Docker awareness** |
-| **Build Docker** | `build-docker/` | Local `docker buildx` only; receives binaries via **artifacts** |
+| **Build Go** | `build-go/` | Cached Go binary build — **one binary per invocation**; **no Docker awareness** |
+| **Build Docker** | `build-docker/` | Local `docker buildx` — **one image per invocation**; receives binaries via **artifacts** |
 | **Push Container** | `push-container/` | Push to all configured registries in one step (Notify-style multiplex) |
 | **Deploy Gate** | `deploy-gate/` | Deployable path diff vs `main`; **checks out what it needs** |
 | **Deploy Terraform** | `deploy-terraform/` | Terraform init + apply; variables as **action inputs** |
@@ -120,21 +120,24 @@ Example (Go Checks skip):
 
 ### Build Go
 
-**Must not know about Docker.** Builds and uploads binary artifact(s). Uses **caching pattern** keyed on `content-key`.
+**One binary per invocation.** Multiple binaries in a repo → multiple **build-go** steps in the app workflow (not a list input on one step).
+
+**Must not know about Docker.** Builds and uploads one binary artifact. Uses **caching pattern** keyed on `content-key`.
 
 | Input | Purpose |
 |-------|---------|
 | `working-directory` | Go module root |
 | `content-key` | Cache key from **detect-changes** (or caller) |
-| `binaries` | Multiline list of binaries to build; each line: `name=package` (e.g. `server=./cmd/server`) |
+| `main-package` | Package path to build (e.g. `./cmd/server`) |
+| `artifact-name` | Name for the uploaded artifact (caller-defined, for downstream `build-docker`) |
 | `skip` | Skip build when cache hit |
 
 | Output | Purpose |
 |--------|---------|
 | `cache-hit` | Whether build was skipped |
-| `artifact-names` | Newline-separated artifact names uploaded (one per binary) |
+| `artifact-name` | Echo of input — artifact containing the built binary |
 
-**Artifacts:** One artifact per binary, preserving output path layout so downstream steps (Dockerfile `COPY`) need no remapping.
+**Artifact:** Preserves output path layout so Dockerfile `COPY` paths need no remapping.
 
 **Checkout:** Sparse — Go sources + `go.mod`/`go.sum` only.
 
@@ -142,12 +145,14 @@ Example (Go Checks skip):
 
 ### Build Docker
 
+**One image per invocation.** Multiple Dockerfiles → multiple **build-docker** steps in the app workflow.
+
 | Input | Purpose |
 |-------|---------|
 | `context` | Docker build context |
 | `dockerfile` | Dockerfile path |
 | `local-tag` | Local image tag (e.g. `my-app:local`) |
-| `artifacts` | Multiline list of artifact names to download (from **Build Go** or other build steps) |
+| `artifacts` | Multiline list of artifact names to download (from one or more **build-go** steps) |
 | `skip` | Skip when image already exists remotely |
 
 | Output | Purpose |
@@ -155,7 +160,7 @@ Example (Go Checks skip):
 | `local-tag` | Tag loaded in local daemon |
 | `content-key` | Content hash for image tag / skip decisions |
 
-Downloads all listed artifacts into the build context preserving paths — Dockerfile `COPY` paths are fixed in the image definition; no separate path mapping input.
+Downloads listed artifacts into the build context preserving paths — Dockerfile `COPY` paths are fixed in the image definition.
 
 **No registry, no push, no Terraform.**
 
@@ -291,15 +296,17 @@ Minimal delivery wrapper. **App repos own all message construction** — workflo
 
 ## Build / deploy job separation
 
-Separate jobs in app repos:
+Separate jobs in app repos. **Compose by repeating steps** — one **build-go** per binary, one **build-docker** per Dockerfile:
 
 ```
-Build Go → Build Docker → Push Container → Deploy Terraform
+build-go (server) ─┐
+build-go (worker) ─┼→ build-docker (api) → push-container → Deploy Terraform
+                   └→ build-docker (worker) → push-container
 ```
 
-Caller uses **detect-changes** / **Push Container** `exists` for skip logic. When `exists == true`, skip Build Go, Build Docker, and push — go straight to deploy.
+Caller uses **detect-changes** / **Push Container** `exists` for skip logic. When `exists == true`, skip build and push — go straight to deploy.
 
-### Typical composition in app `build.yml`
+### Typical composition in app `build.yml` (single binary / single image)
 
 ```yaml
 steps:
@@ -322,16 +329,18 @@ steps:
       ghcr-password: ${{ secrets.GITHUB_TOKEN }}
 
   - uses: densestvoid/workflows/.github/actions/build-go@v1
+    id: build-go
     if: steps.check.outputs.exists != 'true'
     with:
       content-key: ${{ steps.changes.outputs.content-key }}
-      binaries: |
-        server=./cmd/server
+      main-package: ./cmd/server
+      artifact-name: server-binary
 
   - uses: densestvoid/workflows/.github/actions/build-docker@v1
     if: steps.check.outputs.exists != 'true'
     with:
-      artifacts: ${{ steps.build-go.outputs.artifact-names }}
+      dockerfile: Dockerfile
+      artifacts: ${{ steps.build-go.outputs.artifact-name }}
       local-tag: my-app:local
 
   - uses: densestvoid/workflows/.github/actions/push-container@v1
@@ -346,6 +355,8 @@ steps:
       dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
+
+Multiple binaries or images: add another **build-go** / **build-docker** block each — app workflow owns the graph.
 
 ---
 
@@ -527,7 +538,8 @@ App jobs construct `notify-slack-text` / `notify-pr-body` however they want — 
 | **Write Tfvars** / JSON-only variable maps | Action inputs + optional `variables` block; complex types in Terraform HCL |
 | **Build Go knows docker/content keys** | Hash owned by **detect-changes**; binary via artifacts |
 | **Go-specific change detection** | Generalized **detect-changes** with caller-supplied `paths` |
-| **binary-path input** | Artifacts preserve layout; Dockerfile owns `COPY` paths |
+| **binaries list on build-go** | One **build-go** step per binary; app composes the graph |
+| **Multiple images in one build-docker** | One **build-docker** step per Dockerfile |
 | **Workflows repo secrets for cross-repo deploy** | Caller `secrets` context only; secrets live in each app repo |
 | **Organization secrets** | Not using org-level secrets at this time |
 | Build steps know about Terraform | **Build Docker** / **Push Container** are registry/build only |
