@@ -85,7 +85,7 @@ Established by `install-go-tool/` — cacheable actions use `actions/cache` **in
 | Action | Cache key |
 |--------|-----------|
 | **build-go** | `content-key` (from detect-changes) + `main-package` |
-| **build-docker** | Hash of dockerfile + context + input artifacts |
+| **build-docker** | `content-key` + `dockerfile` (image tar in `actions/cache`) |
 | **install-go-tool** | `tool-package` + `tool-version` |
 
 ---
@@ -161,7 +161,12 @@ Whether to call **build-go** at all (e.g. when sources unchanged) is a **caller 
 
 **One image per invocation.** Multiple Dockerfiles → multiple **build-docker** steps in the app workflow.
 
-Mirrors **build-go**: builds image, uploads as artifact (`docker save`). Downstream steps consume the artifact — no local daemon tag handoff.
+Mirrors **build-go**:
+
+1. Compute `content-key` (hash of dockerfile + context + input artifacts)
+2. **`actions/cache`** — restore/save image tar (`docker save`) keyed on `content-key` + `dockerfile`
+3. On cache miss — `docker build` → `docker save` → save to cache
+4. **Upload artifact** — always, for downstream handoff (cross-job or push-container)
 
 | Input | Purpose |
 |-------|---------|
@@ -173,8 +178,9 @@ Mirrors **build-go**: builds image, uploads as artifact (`docker save`). Downstr
 | Output | Purpose |
 |--------|---------|
 | `artifact-name` | Resolved artifact name (default or override) |
+| `content-key` | Image identity hash — use for **push-container** `tag` and registry cache/dedup |
 
-Caching is internal. Whether to call **build-docker** is a **caller `if:`** decision.
+Whether to call **build-docker** is a **caller `if:`** decision. Cache restore is internal — downstream steps do not need to know if the image was rebuilt or restored from cache.
 
 **No registry, no push, no Terraform.**
 
@@ -189,7 +195,7 @@ Multiplexed across registries. Try **all configured** registries; skip unset; **
 | Input | Purpose |
 |-------|---------|
 | `image-artifact` | Artifact name from **build-docker** (downloads and `docker load`) |
-| `tag` | Remote registry tag (caller-supplied, e.g. `pr-123-${{ steps.deploy-changes.outputs.content-key }}`) |
+| `tag` | Remote registry tag — use **`build-docker` `content-key`** (image identity, not detect-changes) |
 | `check-only` | Manifest inspect only — no push |
 
 **Per-registry inputs (all optional):**
@@ -335,7 +341,7 @@ steps:
     if: steps.deploy-changes.outputs.changed == 'true'
     with:
       image-artifact: ${{ steps.docker.outputs.artifact-name }}
-      tag: pr-123-${{ steps.deploy-changes.outputs.content-key }}
+      tag: pr-123-${{ steps.docker.outputs.content-key }}
       check-only: true
       ghcr-image: ${{ github.repository }}/my-app
       ghcr-username: ${{ github.actor }}
@@ -346,7 +352,7 @@ steps:
     if: steps.check.outputs.exists != 'true'
     with:
       image-artifact: ${{ steps.docker.outputs.artifact-name }}
-      tag: pr-123-${{ steps.deploy-changes.outputs.content-key }}
+      tag: pr-123-${{ steps.docker.outputs.content-key }}
       ghcr-image: ${{ github.repository }}/my-app
       ghcr-username: ${{ github.actor }}
       ghcr-password: ${{ secrets.GITHUB_TOKEN }}
@@ -384,7 +390,7 @@ Existing **setup-go** does full checkout — acceptable for Go Checks; new actio
 | **CI go-checks** | Caller `if:` on **detect-changes** (go paths) → `changed` |
 | **Deploy job gate** | Caller `if:` on **detect-changes** (deploy paths) → `changed` |
 | **Go binary** | **build-go** internal `actions/cache`; caller `if:` decides invocation |
-| **Docker image** | Caller `if:` on **push-container** `exists` after `check-only` |
+| **Docker image** | **build-docker** internal `actions/cache`; **push-container** `tag` from **build-docker** `content-key`; caller `if:` on `exists` |
 
 ---
 
@@ -528,7 +534,7 @@ jobs:
 | **Deploy Gate** | Superseded by **detect-changes** with deploy paths |
 | **`skip` / `cache-hit` on build actions** | Caller `if:` decides invocation; cache is internal |
 | **`local-tag` handoff** | **build-docker** uploads image artifact; **push-container** loads it |
-| **`content-key` on build-docker** | Image handoff via `artifact-name`; caller supplies registry `tag` |
+| **Registry tag from detect-changes** | Image identity = **build-docker** `content-key` |
 | **Write Tfvars** / JSON-only variable maps | Action inputs + optional `variables` block; complex types in Terraform HCL |
 | **Static tfvars defaults in v0** | Deferred |
 | **`terraform-dir` on terminate** | Empty module lives in workflows repo; destroy from state only |
