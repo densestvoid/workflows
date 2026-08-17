@@ -34,7 +34,7 @@ Deploy Gate → Build Docker → Push Container → Notify   # image to registry
 |------|-----------|---------|
 | **Build Go** | `build-go/` | Cached Go binary build; content-hash skip logic embedded |
 | **Build Docker** | `build-docker/` | Build container image locally (`docker buildx`); outputs local tag — **no registry, no push** |
-| **Push Container** | `push-container/` | Push an image to a container registry; confirm-if-exists skip; caller chooses registry |
+| **Push Container** | `push-container/` | Push image to any registry; caller passes registry + credentials; confirm-if-exists skip |
 | **Deploy Gate** | `deploy-gate/` | Deployable path diff vs `main` |
 | **Deploy Terraform** | `deploy-terraform/` | Terraform init + apply; variables passed as inputs |
 | **Terminate Terraform** | `terminate-terraform/` | Terraform destroy from state (`pr-destroy` pattern) |
@@ -61,18 +61,40 @@ Future steps (same composable pattern): **Release CLI**, **Deploy Static**, etc.
 
 ### Push Container
 
-Single action, **multiplexed by registry** — same pattern as **Notify** (one step, caller supplies what's needed).
+Single action, **multiplexed across registries** — same pattern as **Notify**: one invocation can push to **all configured registries**; skips any registry not configured.
 
-- **Inputs:** `registry`, `image`, `tag`, `check_only` (optional)
-- **Credentials:** caller passes **all** auth — no built-in secret names or registry-specific assumptions inside the action
-  - `registry_username` — input or env
-  - `registry_password` — input or env (token/password; masked)
-- **Behavior:** `docker login` → optional `manifest inspect` (skip if exists) → tag → push
-- **Outputs:** `image_ref`, `pushed`, `exists`
-- Works with any registry `docker login` supports (GHCR, Docker Hub, etc.) — caller chooses registry and credentials
-- **No Terraform, no build**
+**Notify analogy:**
 
-Registries that need non-Docker auth (ECR, GAR) are out of scope for v0 — caller handles custom login before **Push Container**, or a future specialized step is added.
+| Notify | Push Container |
+|--------|----------------|
+| `slack_webhook` + payload → Slack | `ghcr_*` credentials + image → GHCR |
+| `pr_number` + `pr_body` → PR comment | `dockerhub_*` credentials + image → Docker Hub |
+| Both in one step | All configured registries in one step |
+| Skips unset channels | Skips unset registries |
+
+**Shared inputs:**
+
+| Input | Purpose |
+|-------|---------|
+| `local_tag` | Local image tag to push (from **Build Docker**) |
+| `tag` | Remote tag (e.g. content-hash tag) |
+| `check_only` | If true, manifest inspect only — no push |
+
+**Per-registry inputs (all optional — omit to skip that registry):**
+
+| Registry | Inputs |
+|----------|--------|
+| **GHCR** | `ghcr_image`, `ghcr_username`, `ghcr_password` |
+| **Docker Hub** | `dockerhub_image`, `dockerhub_username`, `dockerhub_password` |
+
+Caller passes credentials for each registry it wants. Action pushes to every configured registry in one step.
+
+**Outputs (per registry, e.g.):** `ghcr_image_ref`, `ghcr_pushed`, `ghcr_exists`, `dockerhub_image_ref`, …  
+**Aggregate:** `exists` — true when **all configured** registries already have the manifest (for skip-build decisions).
+
+**Behavior per configured registry:** login → manifest inspect → tag → push (or inspect-only when `check_only`).
+
+**No Terraform, no build.** Registries requiring non-`docker login` auth (ECR, GAR) are future additions as new optional input groups in the same multiplexing pattern.
 
 ### Typical composition in app `build.yml`
 
@@ -81,12 +103,15 @@ steps:
   - uses: densestvoid/workflows/.github/actions/push-container@v0
     id: check
     with:
-      registry: ghcr.io
-      image: ${{ github.repository }}/my-app
+      local_tag: my-app:local
       tag: pr-123-${{ steps.hash.outputs.docker_build_key }}
       check_only: true
-      registry_username: ${{ github.actor }}
-      registry_password: ${{ secrets.GITHUB_TOKEN }}
+      ghcr_image: ${{ github.repository }}/my-app
+      ghcr_username: ${{ github.actor }}
+      ghcr_password: ${{ secrets.GITHUB_TOKEN }}
+      # dockerhub_image: myuser/my-app
+      # dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      # dockerhub_password: ${{ secrets.DOCKERHUB_TOKEN }}
 
   - uses: densestvoid/workflows/.github/actions/build-go@v0
     if: steps.check.outputs.exists != 'true'
@@ -97,19 +122,17 @@ steps:
   - uses: densestvoid/workflows/.github/actions/push-container@v0
     if: steps.check.outputs.exists != 'true'
     with:
-      registry: ghcr.io
-      image: ${{ github.repository }}/my-app
+      local_tag: my-app:local
       tag: pr-123-${{ steps.hash.outputs.docker_build_key }}
-      registry_username: ${{ github.actor }}
-      registry_password: ${{ secrets.GITHUB_TOKEN }}
-
-# Docker Hub example — same action, different credentials:
-#   registry: docker.io
-#   registry_username: ${{ secrets.DOCKERHUB_USERNAME }}
-#   registry_password: ${{ secrets.DOCKERHUB_TOKEN }}
+      ghcr_image: ${{ github.repository }}/my-app
+      ghcr_username: ${{ github.actor }}
+      ghcr_password: ${{ secrets.GITHUB_TOKEN }}
+      dockerhub_image: myuser/my-app
+      dockerhub_username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub_password: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
 
-Caller can omit **Push Container** entirely (build only), run **Push Container** twice to different registries, or skip **Build Docker** if pushing a pre-built image.
+One push step → GHCR and Docker Hub together when both are configured.
 
 ---
 
