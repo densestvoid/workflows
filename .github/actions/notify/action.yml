@@ -1,0 +1,81 @@
+name: 'Notify'
+description: 'Post Slack notification and/or PR comment from caller-supplied text'
+inputs:
+  slack-webhook:
+    description: 'Slack incoming webhook URL'
+    required: false
+    default: ''
+  slack-text:
+    description: 'Slack message text'
+    required: false
+    default: ''
+  pr-number:
+    description: 'PR/issue number for comment'
+    required: false
+    default: ''
+  pr-body:
+    description: 'Markdown body for PR comment'
+    required: false
+    default: ''
+  github-token:
+    description: 'Token for PR comment API'
+    required: false
+    default: ${{ github.token }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve delivery
+      id: delivery
+      shell: bash
+      run: |
+        set -euo pipefail
+        SEND_SLACK=false
+        if [ -n "${{ inputs.slack-webhook }}" ] && [ -n "${{ inputs.slack-text }}" ]; then
+          SEND_SLACK=true
+        fi
+
+        SEND_PR=false
+        if [ -n "${{ inputs.pr-number }}" ] && [ -n "${{ inputs.pr-body }}" ]; then
+          SEND_PR=true
+        fi
+
+        if [ "$SEND_SLACK" = false ] && [ "$SEND_PR" = false ]; then
+          echo "Nothing to deliver — skipping notify"
+        fi
+
+        echo "send_slack=${SEND_SLACK}" >> "$GITHUB_OUTPUT"
+        echo "send_pr=${SEND_PR}" >> "$GITHUB_OUTPUT"
+
+    - name: Comment on PR
+      if: always() && steps.delivery.outputs.send_pr == 'true'
+      uses: actions/github-script@v7
+      env:
+        PR_NUMBER: ${{ inputs.pr-number }}
+        PR_BODY: ${{ inputs.pr-body }}
+        GITHUB_TOKEN: ${{ inputs.github-token }}
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const prNumber = parseInt(process.env.PR_NUMBER, 10);
+          const body = process.env.PR_BODY;
+          if (!prNumber || !body) {
+            core.info('Skipping PR comment - missing PR number or body');
+            return;
+          }
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: prNumber,
+            body
+          });
+
+    - name: Send Slack notification
+      if: always() && steps.delivery.outputs.send_slack == 'true'
+      shell: bash
+      env:
+        SLACK_WEBHOOK: ${{ inputs.slack-webhook }}
+        SLACK_TEXT: ${{ inputs.slack-text }}
+      run: |
+        set -euo pipefail
+        PAYLOAD=$(jq -n --arg text "$SLACK_TEXT" '{text: $text}')
+        curl -fsS -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$SLACK_WEBHOOK"

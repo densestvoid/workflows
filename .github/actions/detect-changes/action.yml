@@ -1,0 +1,75 @@
+name: 'Detect Changes'
+description: 'Path-pattern diff and content hash for any caller-supplied paths'
+inputs:
+  paths:
+    description: 'Multiline glob patterns to include in diff and hash'
+    required: true
+  base-ref:
+    description: 'Ref to diff against'
+    required: false
+    default: 'main'
+outputs:
+  changed:
+    description: 'true when any matched path changed vs base'
+    value: ${{ steps.detect.outputs.changed }}
+  content-key:
+    description: 'Content hash of matched paths at HEAD'
+    value: ${{ steps.detect.outputs.content-key }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout
+      uses: actions/checkout@v4
+      with:
+        fetch-depth: 0
+        sparse-checkout-cone-mode: false
+        sparse-checkout: |
+          ${{ inputs.paths }}
+
+    - name: Detect changes
+      id: detect
+      shell: bash
+      run: |
+        set -euo pipefail
+
+        BASE_REF="${{ inputs.base-ref }}"
+        mapfile -t PATTERNS < <(printf '%s\n' "${{ inputs.paths }}" | sed '/^[[:space:]]*$/d')
+
+        if [ "${#PATTERNS[@]}" -eq 0 ]; then
+          echo "No paths patterns provided" >&2
+          exit 1
+        fi
+
+        git fetch origin "$BASE_REF" --depth=1 2>/dev/null || git fetch origin "$BASE_REF" || true
+
+        if git show-ref --verify --quiet "refs/remotes/origin/${BASE_REF}"; then
+          BASE="origin/${BASE_REF}"
+        elif git rev-parse --verify --quiet "$BASE_REF" >/dev/null; then
+          BASE="$BASE_REF"
+        else
+          BASE="HEAD^"
+        fi
+
+        MERGE_BASE=$(git merge-base HEAD "$BASE" 2>/dev/null || echo "$BASE")
+
+        CHANGED=false
+        if git diff --quiet "$MERGE_BASE" HEAD -- "${PATTERNS[@]}"; then
+          CHANGED=false
+        else
+          CHANGED=true
+        fi
+
+        HASH_INPUT=$(mktemp)
+        trap 'rm -f "$HASH_INPUT"' EXIT
+        : > "$HASH_INPUT"
+
+        while IFS= read -r -d '' file; do
+          printf '%s\0' "$file" >> "$HASH_INPUT"
+          cat "$file" >> "$HASH_INPUT"
+        done < <(git ls-files -z -- "${PATTERNS[@]}")
+
+        CONTENT_KEY=$(sha256sum "$HASH_INPUT" | awk '{print substr($1,1,16)}')
+
+        echo "changed=${CHANGED}" >> "$GITHUB_OUTPUT"
+        echo "content-key=${CONTENT_KEY}" >> "$GITHUB_OUTPUT"
+        echo "changed=${CHANGED} content-key=${CONTENT_KEY}"

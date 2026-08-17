@@ -35,7 +35,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup@main
+      uses: densestvoid/workflows/.github/actions/setup-go@main
       with:
         go-version: ${{ inputs.go-version }}
         go-version-file: ${{ inputs.go-version-file }}
@@ -50,14 +50,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup@main
+      uses: densestvoid/workflows/.github/actions/setup-go@main
       with:
         go-version: ${{ inputs.go-version }}
         go-version-file: ${{ inputs.go-version-file }}
         working-directory: ${{ inputs.working-directory }}
 
     - name: Install staticcheck
-      uses: densestvoid/workflows/.github/actions/install-tool@main
+      uses: densestvoid/workflows/.github/actions/install-go-tool@main
       with:
         tool-package: honnef.co/go/tools/cmd/staticcheck
 
@@ -70,14 +70,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup@main
+      uses: densestvoid/workflows/.github/actions/setup-go@main
       with:
         go-version: ${{ inputs.go-version }}
         go-version-file: ${{ inputs.go-version-file }}
         working-directory: ${{ inputs.working-directory }}
 
     - name: Install golangci-lint
-      uses: densestvoid/workflows/.github/actions/install-tool@main
+      uses: densestvoid/workflows/.github/actions/install-go-tool@main
       with:
         tool-package: github.com/golangci/golangci-lint/cmd/golangci-lint
 
@@ -90,14 +90,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup@main
+      uses: densestvoid/workflows/.github/actions/setup-go@main
       with:
         go-version: ${{ inputs.go-version }}
         go-version-file: ${{ inputs.go-version-file }}
         working-directory: ${{ inputs.working-directory }}
 
     - name: Install govulncheck
-      uses: densestvoid/workflows/.github/actions/install-tool@main
+      uses: densestvoid/workflows/.github/actions/install-go-tool@main
       with:
         tool-package: golang.org/x/vuln/cmd/govulncheck
 
@@ -110,14 +110,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup@main
+      uses: densestvoid/workflows/.github/actions/setup-go@main
       with:
         go-version: ${{ inputs.go-version }}
         go-version-file: ${{ inputs.go-version-file }}
         working-directory: ${{ inputs.working-directory }}
 
     - name: Install gosec
-      uses: densestvoid/workflows/.github/actions/install-tool@main
+      uses: densestvoid/workflows/.github/actions/install-go-tool@main
       with:
         tool-package: github.com/securego/gosec/v2/cmd/gosec
 

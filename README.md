@@ -1,98 +1,113 @@
 # DenseVoid Workflows
 
-A collection of reusable GitHub Actions workflows and composite actions for common development tasks.
+Composable GitHub Actions toolbox for CI, build, deploy, and notify.
 
 ## Workflows
 
 ### Go Checks (`.github/workflows/go-checks.yml`)
 
-A comprehensive Go code quality workflow that performs multiple checks in parallel.
+Parallel Go quality checks: vet, staticcheck, golangci-lint, govulncheck, gosec.
 
-**Features:**
-- **Vet**: Basic Go code analysis using `go vet`
-- **Static Analysis**: Advanced static analysis using `staticcheck`
-- **Linting**: Code linting using `golangci-lint`
-- **Vulnerability Check**: Security vulnerability scanning using `govulncheck`
-- **Security Check**: Security analysis using `gosec`
-
-**Parameters:**
-- `go-version` - Explicit Go version (optional; overrides `go-version-file` when set)
-- `go-version-file` - Path to `go.mod`, `go.work`, etc. (optional; default: `{working-directory}/go.mod`)
-- `working-directory` - Working directory for the Go project (optional, default: `.`)
-
-When neither `go-version` nor `go-version-file` is set, the Go toolchain is read from `go.mod` in the working directory.
-
-**Secrets:**
-- `github-token` - GitHub token for accessing private repositories (optional, default: `${{ secrets.GITHUB_TOKEN }}`)
-
-**Usage:**
 ```yaml
 jobs:
   go-checks:
     uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
     with:
-      working-directory: './my-go-project'
-    # Or pin explicitly: go-version: '1.21'
-    secrets:
-      github-token: ${{ secrets.GITHUB_TOKEN }}
+      working-directory: '.'
 ```
 
-**Requirements:**
-- Go modules enabled in your project
-- `go.mod` file in the working directory
-- Appropriate permissions for the workflow to run
+Pair with **detect-changes** in the caller repo to skip when Go sources are unchanged.
 
 ## Actions
 
-### Setup (`.github/actions/setup`)
+| Action | Purpose |
+|--------|---------|
+| [detect-changes](.github/actions/detect-changes) | Path diff + content hash for any glob set |
+| [build-go](.github/actions/build-go) | One Go binary → artifact (cached) |
+| [build-docker](.github/actions/build-docker) | One Docker image → artifact (cached) |
+| [push-container](.github/actions/push-container) | Load image artifact; push to GHCR and/or Docker Hub |
+| [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply |
+| [terminate-terraform](.github/actions/terminate-terraform) | Empty-module destroy + S3 state delete |
+| [notify](.github/actions/notify) | Slack + PR comment delivery |
+| [setup-go](.github/actions/setup-go) | Checkout + Go toolchain |
+| [install-go-tool](.github/actions/install-go-tool) | Install + cache a Go CLI tool |
 
-Sets up a Go environment with checkout and Go installation.
+Pin actions at the same ref (e.g. `@main` during v0, `@v1` when released):
 
-**Inputs:**
-- `go-version` - Explicit Go version (optional; overrides `go-version-file` when set)
-- `go-version-file` - Path to version file (optional; default: `{working-directory}/go.mod`)
-- `working-directory` - Go project root relative to repo root (optional, default: `.`)
-
-**Usage:**
 ```yaml
-- name: Setup Go Environment
-  uses: densestvoid/workflows/.github/actions/setup@main
+- uses: densestvoid/workflows/.github/actions/build-go@main
   with:
-    working-directory: '.'
+    content-key: ${{ steps.go-changes.outputs.content-key }}
+    main-package: ./cmd/server
 ```
 
-### Install Tool (`.github/actions/install-tool`)
+## Typical build pipeline
 
-Installs and caches a Go tool with specified version.
-
-**Inputs:**
-- `tool-package` - Go package path for the tool (required)
-- `tool-version` - Version of the tool to install (optional, default: `latest`)
-
-**Usage:**
 ```yaml
-- name: Install golangci-lint
-  uses: densestvoid/workflows/.github/actions/install-tool@main
-  with:
-    tool-package: github.com/golangci/golangci-lint/cmd/golangci-lint
-    tool-version: 'v1.54.2'  # or 'latest' for latest version
+steps:
+  - uses: densestvoid/workflows/.github/actions/detect-changes@main
+    id: deploy-changes
+    with:
+      paths: |
+        **/*.go
+        go.mod
+        go.sum
+        Dockerfile
+
+  - uses: densestvoid/workflows/.github/actions/build-go@main
+    id: build-go
+    if: steps.deploy-changes.outputs.changed == 'true'
+    with:
+      content-key: ${{ steps.deploy-changes.outputs.content-key }}
+      main-package: ./cmd/server
+
+  - uses: densestvoid/workflows/.github/actions/build-docker@main
+    id: docker
+    if: steps.deploy-changes.outputs.changed == 'true'
+    with:
+      artifacts: ${{ steps.build-go.outputs.artifact-name }}
+      dockerfile: Dockerfile
+
+  - uses: densestvoid/workflows/.github/actions/push-container@main
+    id: check
+    if: steps.deploy-changes.outputs.changed == 'true'
+    with:
+      image-artifact: ${{ steps.docker.outputs.artifact-name }}
+      tag: pr-123-${{ steps.deploy-changes.outputs.content-key }}
+      check-only: true
+      ghcr-image: ${{ github.repository }}/my-app
+      ghcr-username: ${{ github.actor }}
+      ghcr-password: ${{ secrets.GITHUB_TOKEN }}
+
+  - uses: densestvoid/workflows/.github/actions/push-container@main
+    if: steps.check.outputs.exists != 'true'
+    with:
+      image-artifact: ${{ steps.docker.outputs.artifact-name }}
+      tag: pr-123-${{ steps.deploy-changes.outputs.content-key }}
+      ghcr-image: ${{ github.repository }}/my-app
+      ghcr-username: ${{ github.actor }}
+      ghcr-password: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-## Repository Structure
+## Repository structure
 
 ```
-densestvoid/workflows/
-├── .github/
-│   ├── workflows/      # Reusable workflows
-│   │   └── go-checks.yml
-│   └── actions/        # Composite actions
-│       ├── setup/
-│       │   └── action.yml
-│       └── install-tool/
-│           └── action.yml
-└── README.md          # This file
+.github/
+├── workflows/go-checks.yml
+├── actions/
+│   ├── setup-go/
+│   ├── install-go-tool/
+│   ├── detect-changes/
+│   ├── build-go/
+│   ├── build-docker/
+│   ├── push-container/
+│   ├── deploy-terraform/
+│   ├── terminate-terraform/
+│   └── notify/
+└── terraform/pr-destroy/
 ```
 
-## Contributing
+## Internal constants
 
-This repository is designed as a workflow library. Workflows and actions are organized in the `.github` directory following GitHub's standard conventions for reusable workflows and composite actions.
+- Terraform version: `1.5.7`
+- S3 state bucket: `densestvoid-terraform`

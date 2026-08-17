@@ -1,0 +1,190 @@
+name: 'Push Container'
+description: 'Load image artifact and push to all configured registries'
+inputs:
+  image-artifact:
+    description: 'Artifact name from build-docker'
+    required: true
+  tag:
+    description: 'Remote registry tag'
+    required: true
+  check-only:
+    description: 'Manifest inspect only — no push'
+    required: false
+    default: 'false'
+  ghcr-image:
+    description: 'GHCR image (e.g. owner/repo/app)'
+    required: false
+    default: ''
+  ghcr-username:
+    description: 'GHCR username'
+    required: false
+    default: ''
+  ghcr-password:
+    description: 'GHCR password or token'
+    required: false
+    default: ''
+  dockerhub-image:
+    description: 'Docker Hub image (e.g. user/app)'
+    required: false
+    default: ''
+  dockerhub-username:
+    description: 'Docker Hub username'
+    required: false
+    default: ''
+  dockerhub-password:
+    description: 'Docker Hub password or token'
+    required: false
+    default: ''
+outputs:
+  exists:
+    description: 'true when all configured registries have the manifest'
+    value: ${{ steps.push.outputs.exists }}
+  image-ref:
+    description: 'Primary registry image reference'
+    value: ${{ steps.push.outputs.image-ref }}
+  ghcr-image-ref:
+    description: 'GHCR image reference'
+    value: ${{ steps.push.outputs.ghcr-image-ref }}
+  ghcr-pushed:
+    description: 'true when pushed to GHCR'
+    value: ${{ steps.push.outputs.ghcr-pushed }}
+  ghcr-exists:
+    description: 'true when manifest exists in GHCR'
+    value: ${{ steps.push.outputs.ghcr-exists }}
+  dockerhub-image-ref:
+    description: 'Docker Hub image reference'
+    value: ${{ steps.push.outputs.dockerhub-image-ref }}
+  dockerhub-pushed:
+    description: 'true when pushed to Docker Hub'
+    value: ${{ steps.push.outputs.dockerhub-pushed }}
+  dockerhub-exists:
+    description: 'true when manifest exists in Docker Hub'
+    value: ${{ steps.push.outputs.dockerhub-exists }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Download image artifact
+      uses: actions/download-artifact@v4
+      with:
+        name: ${{ inputs.image-artifact }}
+        path: ${{ runner.temp }}/push-container
+
+    - name: Push to registries
+      id: push
+      shell: bash
+      env:
+        IMAGE_ARTIFACT: ${{ inputs.image-artifact }}
+        TAG: ${{ inputs.tag }}
+        CHECK_ONLY: ${{ inputs.check-only }}
+        GHCR_IMAGE: ${{ inputs.ghcr-image }}
+        GHCR_USERNAME: ${{ inputs.ghcr-username }}
+        GHCR_PASSWORD: ${{ inputs.ghcr-password }}
+        DOCKERHUB_IMAGE: ${{ inputs.dockerhub-image }}
+        DOCKERHUB_USERNAME: ${{ inputs.dockerhub-username }}
+        DOCKERHUB_PASSWORD: ${{ inputs.dockerhub-password }}
+        ARTIFACT_DIR: ${{ runner.temp }}/push-container
+      run: |
+        set -euo pipefail
+
+        TAR_FILE=$(find "$ARTIFACT_DIR" -name '*.tar' -type f | head -1)
+        if [ -z "$TAR_FILE" ]; then
+          TAR_FILE="${ARTIFACT_DIR}/${IMAGE_ARTIFACT}.tar"
+        fi
+        if [ ! -f "$TAR_FILE" ]; then
+          echo "Image tar not found in ${ARTIFACT_DIR}" >&2
+          exit 1
+        fi
+
+        docker load -i "$TAR_FILE"
+        LOADED_TAG=$(docker images --format '{{.Repository}}:{{.Tag}}' | head -1)
+        LOCAL_IMAGE="${LOADED_TAG:-build-docker-local:${IMAGE_ARTIFACT}}"
+
+        configured=0
+        succeeded=0
+        all_exist=true
+        primary_ref=""
+        failures=0
+
+        push_registry() {
+          local registry="$1"
+          local image="$2"
+          local username="$3"
+          local password="$4"
+          local prefix="$5"
+
+          if [ -z "$image" ] || [ -z "$username" ] || [ -z "$password" ]; then
+            return 0
+          fi
+
+          configured=$((configured + 1))
+          local ref
+          if [[ "$image" == ghcr.io/* ]]; then
+            ref="${image}:${TAG}"
+          elif [ "$prefix" = "ghcr" ]; then
+            ref="ghcr.io/${image}:${TAG}"
+          else
+            ref="${image}:${TAG}"
+          fi
+
+          local login_host="docker.io"
+          if [ "$prefix" = "ghcr" ]; then
+            login_host="ghcr.io"
+          fi
+
+          echo "${password}" | docker login "$login_host" -u "${username}" --password-stdin
+
+          set +e
+          docker manifest inspect "$ref" >/dev/null 2>&1
+          local inspect_code=$?
+          set -e
+
+          if [ "$inspect_code" -eq 0 ]; then
+            echo "${prefix}-exists=true" >> "$GITHUB_OUTPUT"
+            echo "${prefix}-image-ref=${ref}" >> "$GITHUB_OUTPUT"
+            echo "${prefix}-pushed=false" >> "$GITHUB_OUTPUT"
+            succeeded=$((succeeded + 1))
+            [ -z "$primary_ref" ] && primary_ref="$ref"
+            return 0
+          fi
+
+          echo "${prefix}-exists=false" >> "$GITHUB_OUTPUT"
+          all_exist=false
+
+          if [ "$CHECK_ONLY" = "true" ]; then
+            succeeded=$((succeeded + 1))
+            echo "${prefix}-pushed=false" >> "$GITHUB_OUTPUT"
+            return 0
+          fi
+
+          docker tag "$LOCAL_IMAGE" "$ref"
+          if docker push "$ref"; then
+            echo "${prefix}-pushed=true" >> "$GITHUB_OUTPUT"
+            echo "${prefix}-image-ref=${ref}" >> "$GITHUB_OUTPUT"
+            succeeded=$((succeeded + 1))
+            [ -z "$primary_ref" ] && primary_ref="$ref"
+          else
+            echo "${prefix}-pushed=false" >> "$GITHUB_OUTPUT"
+            failures=$((failures + 1))
+          fi
+        }
+
+        push_registry ghcr "$GHCR_IMAGE" "$GHCR_USERNAME" "$GHCR_PASSWORD" ghcr
+        push_registry dockerhub "$DOCKERHUB_IMAGE" "$DOCKERHUB_USERNAME" "$DOCKERHUB_PASSWORD" dockerhub
+
+        if [ "$configured" -eq 0 ]; then
+          echo "No registries configured" >&2
+          exit 1
+        fi
+
+        if [ "$failures" -gt 0 ]; then
+          echo "One or more configured registries failed" >&2
+          exit 1
+        fi
+
+        if [ "$all_exist" = true ] && [ "$configured" -gt 0 ]; then
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+        echo "image-ref=${primary_ref}" >> "$GITHUB_OUTPUT"

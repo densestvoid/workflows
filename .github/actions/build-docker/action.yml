@@ -1,0 +1,119 @@
+name: 'Build Docker'
+description: 'Build one Docker image and upload as artifact (cached internally)'
+inputs:
+  context:
+    description: 'Docker build context'
+    required: false
+    default: '.'
+  dockerfile:
+    description: 'Dockerfile path'
+    required: false
+    default: 'Dockerfile'
+  artifacts:
+    description: 'Multiline list of artifact names to download from build-go'
+    required: false
+    default: ''
+  artifact-name:
+    description: 'Output artifact name (default: basename of dockerfile)'
+    required: false
+    default: ''
+outputs:
+  artifact-name:
+    description: 'Uploaded image artifact name'
+    value: ${{ steps.meta.outputs.artifact-name }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve inputs
+      id: meta
+      shell: bash
+      run: |
+        set -euo pipefail
+        DOCKERFILE="${{ inputs.dockerfile }}"
+        ARTIFACT_NAME="${{ inputs.artifact-name }}"
+        if [ -z "$ARTIFACT_NAME" ]; then
+          ARTIFACT_NAME=$(basename "$DOCKERFILE")
+          if [ "$ARTIFACT_NAME" = "Dockerfile" ]; then
+            ARTIFACT_NAME="image"
+          fi
+        fi
+        echo "artifact-name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
+        echo "dockerfile=${DOCKERFILE}" >> "$GITHUB_OUTPUT"
+
+    - name: Checkout Docker context
+      uses: actions/checkout@v4
+      with:
+        sparse-checkout-cone-mode: false
+        sparse-checkout: |
+          ${{ inputs.dockerfile }}
+          ${{ inputs.context }}/**
+
+    - name: Download input artifacts
+      if: ${{ inputs.artifacts != '' }}
+      shell: bash
+      env:
+        ARTIFACTS: ${{ inputs.artifacts }}
+        CONTEXT: ${{ inputs.context }}
+        GH_TOKEN: ${{ github.token }}
+      run: |
+        set -euo pipefail
+        while IFS= read -r name; do
+          [ -z "$name" ] && continue
+          gh run download "$GITHUB_RUN_ID" --name "$name" --dir "$CONTEXT"
+        done <<< "$ARTIFACTS"
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Compute cache key
+      id: cache-key
+      shell: bash
+      env:
+        CONTEXT: ${{ inputs.context }}
+        DOCKERFILE: ${{ steps.meta.outputs.dockerfile }}
+      run: |
+        set -euo pipefail
+        HASH=$( {
+          echo "$DOCKERFILE"
+          sha256sum "$DOCKERFILE" 2>/dev/null || true
+          find "$CONTEXT" -type f -print0 | sort -z | xargs -0 sha256sum 2>/dev/null || true
+        } | sha256sum | awk '{print substr($1,1,16)}')
+        echo "key=${HASH}" >> "$GITHUB_OUTPUT"
+
+    - name: Restore image cache
+      uses: actions/cache@v4
+      id: image-cache
+      with:
+        path: ${{ runner.temp }}/build-docker-${{ steps.meta.outputs.artifact-name }}.tar
+        key: build-docker-${{ steps.cache-key.outputs.key }}-${{ steps.meta.outputs.dockerfile }}-${{ runner.os }}
+        restore-keys: |
+          build-docker-${{ steps.cache-key.outputs.key }}-
+
+    - name: Build and save image
+      shell: bash
+      env:
+        CONTEXT: ${{ inputs.context }}
+        DOCKERFILE: ${{ steps.meta.outputs.dockerfile }}
+        ARTIFACT_NAME: ${{ steps.meta.outputs.artifact-name }}
+        IMAGE_TAR: ${{ runner.temp }}/build-docker-${{ steps.meta.outputs.artifact-name }}.tar
+        LOCAL_TAG: build-docker-local:${{ steps.meta.outputs.artifact-name }}
+      run: |
+        set -euo pipefail
+
+        if [ ! -f "$IMAGE_TAR" ]; then
+          docker buildx build \
+            --file "$DOCKERFILE" \
+            --tag "$LOCAL_TAG" \
+            --load \
+            "$CONTEXT"
+          docker save "$LOCAL_TAG" -o "$IMAGE_TAR"
+        fi
+
+        cp "$IMAGE_TAR" "${ARTIFACT_NAME}.tar"
+
+    - name: Upload image artifact
+      uses: actions/upload-artifact@v4
+      with:
+        name: ${{ steps.meta.outputs.artifact-name }}
+        path: ${{ format('{0}.tar', steps.meta.outputs.artifact-name) }}
+        if-no-files-found: error

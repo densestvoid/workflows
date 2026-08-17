@@ -1,0 +1,29 @@
+name: 'Install and Cache Go Tool'
+description: 'Install and cache a Go CLI tool'
+inputs:
+  tool-package:
+    description: 'Go package path for the tool'
+    required: true
+  tool-version:
+    description: 'Version of the tool to install (e.g., latest, v1.0.0)'
+    required: false
+    default: 'latest'
+runs:
+  using: 'composite'
+  steps:
+    - name: Cache tool
+      uses: actions/cache@v4
+      with:
+        path: ~/go/bin
+        key: install-go-tool-${{ inputs.tool-package }}-${{ inputs.tool-version }}-${{ runner.os }}
+        restore-keys: |
+          install-go-tool-${{ inputs.tool-package }}-${{ runner.os }}-
+
+    - name: Go install
+      shell: bash
+      run: |
+        set -euo pipefail
+        TOOL_NAME=$(basename "${{ inputs.tool-package }}")
+        if [ ! -f "$HOME/go/bin/$TOOL_NAME" ]; then
+          go install "${{ inputs.tool-package }}@${{ inputs.tool-version }}"
+        fi

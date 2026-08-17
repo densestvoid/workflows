@@ -1,5 +1,5 @@
 name: 'Setup Go Environment'
-description: 'Setup Go environment with checkout and Go installation'
+description: 'Checkout and install Go toolchain'
 inputs:
   go-version:
     description: 'Explicit Go version (overrides go-version-file when set)'
@@ -17,18 +17,18 @@ runs:
   using: 'composite'
   steps:
     - name: Checkout code
-      uses: actions/checkout@v7
+      uses: actions/checkout@v4
 
     - name: Setup Go (explicit version)
       if: ${{ inputs.go-version != '' }}
-      uses: actions/setup-go@v7
+      uses: actions/setup-go@v5
       with:
         go-version: ${{ inputs.go-version }}
         check-latest: true
 
     - name: Setup Go (from version file)
       if: ${{ inputs.go-version == '' }}
-      uses: actions/setup-go@v7
+      uses: actions/setup-go@v5
       with:
         go-version-file: >-
           ${{ inputs.go-version-file != '' && inputs.go-version-file

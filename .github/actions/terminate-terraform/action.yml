@@ -1,0 +1,85 @@
+name: 'Terminate Terraform'
+description: 'Destroy resources from state using workflows-repo pr-destroy module and delete S3 state'
+inputs:
+  backend-key:
+    description: 'S3 state key to destroy and delete'
+    required: true
+  do-token:
+    description: 'DigitalOcean API token'
+    required: true
+  terraform-aws-access-key-id:
+    description: 'S3 backend access key ID'
+    required: true
+  terraform-aws-secret-access-key:
+    description: 'S3 backend secret access key'
+    required: true
+  terraform-aws-region:
+    description: 'S3 backend region'
+    required: true
+  variables:
+    description: 'Multiline KEY=value Terraform variables if required'
+    required: false
+    default: ''
+  workflows-ref:
+    description: 'Ref of densestvoid/workflows to load pr-destroy module'
+    required: false
+    default: 'main'
+outputs:
+  destroyed:
+    description: 'true on successful destroy'
+    value: ${{ steps.terminate.outputs.destroyed }}
+  state-deleted:
+    description: 'true when S3 state file was removed'
+    value: ${{ steps.terminate.outputs.state-deleted }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout pr-destroy module
+      uses: actions/checkout@v4
+      with:
+        repository: densestvoid/workflows
+        ref: ${{ inputs.workflows-ref }}
+        path: _workflows
+        sparse-checkout-cone-mode: false
+        sparse-checkout: .github/terraform/pr-destroy
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.5.7
+        terraform_wrapper: false
+
+    - name: Terminate
+      id: terminate
+      shell: bash
+      env:
+        BACKEND_KEY: ${{ inputs.backend-key }}
+        DO_TOKEN: ${{ inputs.do-token }}
+        AWS_ACCESS_KEY_ID: ${{ inputs.terraform-aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.terraform-aws-secret-access-key }}
+        AWS_REGION: ${{ inputs.terraform-aws-region }}
+        VARIABLES: ${{ inputs.variables }}
+      run: |
+        set -euo pipefail
+        cd _workflows/.github/terraform/pr-destroy
+
+        VAR_ARGS=(-var "do_token=${DO_TOKEN}")
+        while IFS= read -r line; do
+          [ -z "$line" ] && continue
+          key="${line%%=*}"
+          val="${line#*=}"
+          VAR_ARGS+=(-var "${key}=${val}")
+        done <<< "$VARIABLES"
+
+        terraform init \
+          -backend-config="key=${BACKEND_KEY}" \
+          -backend-config="region=${AWS_REGION}"
+
+        if terraform state list 2>/dev/null | grep -q .; then
+          terraform apply -auto-approve "${VAR_ARGS[@]}"
+        fi
+
+        aws s3 rm "s3://densestvoid-terraform/${BACKEND_KEY}" || true
+
+        echo "destroyed=true" >> "$GITHUB_OUTPUT"
+        echo "state-deleted=true" >> "$GITHUB_OUTPUT"
