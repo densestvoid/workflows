@@ -21,7 +21,7 @@ Example compositions (app-defined):
 ```
 Deploy Gate → build.yml → Deploy Terraform → prepare-notify → Notify
 Deploy Gate → build.yml → Release CLI → prepare-notify → Notify
-Deploy Gate → Build Docker → prepare-notify → Notify   # image only, no Terraform
+Deploy Gate → Build Docker → Push Container → Notify   # image to registry only
 ```
 
 ---
