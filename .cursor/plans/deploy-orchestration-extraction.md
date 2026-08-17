@@ -53,10 +53,10 @@ Composite actions for all v0 steps.
 |------|-----------|---------|
 | **Detect Changes** | `detect-changes/` | Path-pattern diff + content hash for **any** caller-supplied paths (CI skip, deploy gating, cache keys) |
 | **Build Go** | `build-go/` | Cached Go binary build — **one binary per invocation**; **no Docker awareness** |
-| **Build Docker** | `build-docker/` | Local `docker buildx` — **one image per invocation**; receives binaries via **artifacts** |
-| **Push Container** | `push-container/` | Push to all configured registries in one step (Notify-style multiplex) |
+| **Build Docker** | `build-docker/` | `docker buildx` — **one image per invocation**; uploads image as **artifact** |
+| **Push Container** | `push-container/` | Push image artifact to all configured registries in one step |
 | **Deploy Terraform** | `deploy-terraform/` | Terraform init + apply; variables as **action inputs** |
-| **Terminate Terraform** | `terminate-terraform/` | Destroy via `pr-destroy` empty-module pattern; **delete S3 state file on success** |
+| **Terminate Terraform** | `terminate-terraform/` | Destroy via workflows-repo `pr-destroy` empty module; **delete S3 state file on success** |
 | **Notify** | `notify/` | Slack + PR comment delivery; **text passed as input vars** |
 
 ### Existing actions (rename for clarity)
@@ -76,17 +76,16 @@ Future steps (same composable pattern): **Release CLI**, **Deploy Static**, etc.
 
 ## Caching pattern
 
-Established by `install-go-tool/` — new actions that produce or consume cacheable work should follow the same pattern:
+Established by `install-go-tool/` — cacheable actions use `actions/cache` **internally**. Callers do not receive cache status; they decide whether to invoke an action at all via workflow `if:` conditions.
 
 1. **Key** — action-specific (see below)
 2. **Restore** — `actions/cache` with exact key + `restore-keys` prefix fallback
-3. **Skip** — on cache hit, skip expensive work and expose `cache-hit` output
-4. **Save** — on miss, run work then let cache action save at step end
+3. **Save** — on miss, run work then let cache action save at step end
 
 | Action | Cache key |
 |--------|-----------|
 | **build-go** | `content-key` (from detect-changes) + `main-package` |
-| **build-docker** | Own `content-key` (dockerfile + context + artifacts) |
+| **build-docker** | Hash of dockerfile + context + input artifacts |
 | **install-go-tool** | `tool-package` + `tool-version` |
 
 ---
@@ -105,7 +104,7 @@ Generalized change detection for **any** path set — not language-specific. Cal
 | Output | Purpose |
 |--------|---------|
 | `changed` | `true` when any matched path changed vs base |
-| `content-key` | Content hash of matched paths (for **build-go** cache and coarse skip signals) |
+| `content-key` | Content hash of matched paths (for **build-go** cache and caller-driven skip/`tag` decisions) |
 
 **Checkout:** Sparse — only files matching `paths`. Minimum git history for merge-base. Own checkout; caller does not pre-checkout.
 
@@ -121,7 +120,7 @@ Examples:
       go.mod
       go.sum
 
-# Deploy job gate (replaces deploy-gate)
+# Deploy job gate
 - uses: densestvoid/workflows/.github/actions/detect-changes@v1
   id: deploy-changes
   with:
@@ -137,7 +136,7 @@ Examples:
 
 **One binary per invocation.** Multiple binaries → multiple **build-go** steps in the app workflow.
 
-**Must not know about Docker.** Builds and uploads one binary artifact. Uses **caching pattern**.
+**Must not know about Docker.** Builds and uploads one binary artifact. Caching is internal.
 
 | Input | Purpose |
 |-------|---------|
@@ -145,12 +144,12 @@ Examples:
 | `content-key` | From **detect-changes** (or caller) |
 | `main-package` | Package path to build (e.g. `./cmd/server`) |
 | `artifact-name` | Optional. Default: **basename of `main-package`** (e.g. `./cmd/server` → `server`) |
-| `skip` | Skip build when cache hit |
 
 | Output | Purpose |
 |--------|---------|
-| `cache-hit` | Whether build was skipped |
 | `artifact-name` | Resolved artifact name (default or override) |
+
+Whether to call **build-go** at all (e.g. when sources unchanged) is a **caller `if:`** decision — not an action input.
 
 **Artifact:** Preserves output path layout so Dockerfile `COPY` paths need no remapping.
 
@@ -162,48 +161,36 @@ Examples:
 
 **One image per invocation.** Multiple Dockerfiles → multiple **build-docker** steps in the app workflow.
 
-Computes `content-key` from dockerfile + context + downloaded artifact hashes **before** `docker build`. This is the authoritative image identity for registry tags — not `detect-changes`.
+Mirrors **build-go**: builds image, uploads as artifact (`docker save`). Downstream steps consume the artifact — no local daemon tag handoff.
 
 | Input | Purpose |
 |-------|---------|
 | `context` | Docker build context |
 | `dockerfile` | Dockerfile path |
-| `local-tag` | Local image tag (e.g. `my-app:local`) |
-| `artifacts` | Multiline list of artifact names to download (from one or more **build-go** steps) |
+| `artifacts` | Multiline list of artifact names to download (from **build-go** steps) |
+| `artifact-name` | Optional. Default: **basename of `dockerfile`** (e.g. `Dockerfile` → `image`, `Dockerfile.worker` → `Dockerfile.worker`) |
 
 | Output | Purpose |
 |--------|---------|
-| `local-tag` | Tag loaded in local daemon |
-| `content-key` | Image content hash — use for **push-container** `tag` and `check-only` |
+| `artifact-name` | Resolved artifact name (default or override) |
 
-Registry skip is owned by **push-container** `check-only` — no `skip` input on build-docker.
+Caching is internal. Whether to call **build-docker** is a **caller `if:`** decision.
 
 **No registry, no push, no Terraform.**
 
-**Checkout:** Sparse — Dockerfile + context files; artifacts downloaded separately.
+**Checkout:** Sparse — Dockerfile + context files; input artifacts downloaded separately.
 
 ---
 
 ### Push Container
 
-Single action, **multiplexed across registries** — same pattern as **Notify**.
-
-**Behavior:** Try **all configured** registries. Skip unset registries. **Fail the step if any configured registry fails** (partial success is not success).
-
-| Notify | Push Container |
-|--------|----------------|
-| `slack_webhook` + text → Slack | `ghcr_*` + image → GHCR |
-| `pr_number` + `pr_body` → PR comment | `dockerhub_*` + image → Docker Hub |
-| Skips unset channels | Skips unset registries |
-| Fails if a configured channel fails | Fails if a configured registry fails |
-
-**Shared inputs:**
+Multiplexed across registries. Try **all configured** registries; skip unset; **fail if any configured registry fails**.
 
 | Input | Purpose |
 |-------|---------|
-| `local-tag` | Local image tag (from **build-docker**) |
-| `tag` | Remote tag — use **`build-docker` `content-key`** (not detect-changes) |
-| `check-only` | Manifest inspect only — no push; drives registry skip |
+| `image-artifact` | Artifact name from **build-docker** (downloads and `docker load`) |
+| `tag` | Remote registry tag (caller-supplied, e.g. `pr-123-${{ steps.deploy-changes.outputs.content-key }}`) |
+| `check-only` | Manifest inspect only — no push |
 
 **Per-registry inputs (all optional):**
 
@@ -212,11 +199,13 @@ Single action, **multiplexed across registries** — same pattern as **Notify**.
 | **GHCR** | `ghcr-image`, `ghcr-username`, `ghcr-password` |
 | **Docker Hub** | `dockerhub-image`, `dockerhub-username`, `dockerhub-password` |
 
-**Outputs:** Per-registry `*_image_ref`, `*_pushed`, `*_exists`; aggregate `exists`; **`image-ref`** — primary registry image reference for downstream (e.g. `TF_VAR_docker_image_tag`).
+**Outputs:** Per-registry `*_image_ref`, `*_pushed`, `*_exists`; aggregate `exists`; **`image-ref`** — primary registry image reference for downstream (e.g. Terraform).
 
-**Checkout:** None (operates on local Docker image only).
+Whether to call **push-container** (or call with `check-only` first) is a **caller `if:`** decision.
 
-**Multi-image:** Each **build-docker** → **push-container** pair has its own `local-tag`, `content-key`, and `check-only`/`push` cycle.
+**Checkout:** None.
+
+**Multi-image:** Each **build-docker** → **push-container** pair has its own artifact and tag.
 
 ---
 
@@ -243,8 +232,6 @@ Infra secrets (`do-token`, `terraform-aws-s3-*`) are **action inputs** — calle
 
 **Domain / complex types:** CI passes scalars only. Structured values (e.g. `{ hostname, zone }`) are built in Terraform `locals` inside the app module — not in CI.
 
-**Static defaults:** `*.auto.tfvars` / `variables.tf` defaults in app repo; CI only passes dynamic values (image tag, deployment id).
-
 **Checkout:** Sparse — `terraform-dir` only.
 
 #### Inputs vs `TF_VAR_*` env
@@ -259,21 +246,20 @@ Infra secrets (`do-token`, `terraform-aws-s3-*`) are **action inputs** — calle
 
 ### Terminate Terraform
 
-Same `pr-destroy` empty-module pattern as budget today. Empty destroy module lives in **workflows repo** (generic). On successful destroy, **delete the S3 state file**.
+Destroy from existing state using the **workflows-repo** `pr-destroy` empty module — no app `terraform-dir` checkout. On successful destroy, **delete the S3 state file**.
 
 | Input | Purpose |
 |-------|---------|
-| `terraform-dir` | App Terraform root (for variable context if needed) |
 | `backend-key` | S3 state key to destroy + delete |
 | `do-token`, `terraform-aws-*` | Same as Deploy Terraform |
-| `variables` | Terraform variables needed for destroy context |
+| `variables` | Terraform variables if required by destroy |
 
 | Output | Purpose |
 |--------|---------|
 | `destroyed` | `true` on success |
 | `state-deleted` | `true` when S3 state file removed |
 
-**Checkout:** Sparse — app `terraform-dir` + workflows-repo `pr-destroy` module.
+**Checkout:** Workflows-repo `terraform/pr-destroy` module only.
 
 ---
 
@@ -297,7 +283,7 @@ Minimal delivery wrapper. **App repos own all message construction** — workflo
 
 ## Build / deploy composition
 
-**Compose by repeating steps** — one **build-go** per binary, one **build-docker** per Dockerfile, one **push-container** cycle per image:
+**Compose by repeating steps** — one **build-go** per binary, one **build-docker** per Dockerfile, one **push-container** per image:
 
 ```
 build-go (server) ─┐
@@ -305,14 +291,23 @@ build-go (worker) ─┼→ build-docker (api) → push-container → Deploy Ter
                    └→ build-docker (worker) → push-container
 ```
 
-**Registry skip:** **push-container** `check-only` with tag from **`build-docker` `content-key`**. When `exists`, skip push.
+**Skip logic:** Callers use **detect-changes** `changed` / `content-key` and **push-container** `exists` in workflow `if:` conditions — actions are not invoked when there is nothing to do.
 
-**Jobs vs steps:** Whether build and deploy run in the same job (shared workspace) or separate jobs (artifact upload/download between jobs) is **left to app repos**. The actions support both; cross-job composition requires explicit artifact handoff in the app workflow.
+**Jobs vs steps:** Whether build and deploy run in the same job (shared workspace) or separate jobs (artifact upload/download between jobs) is **left to app repos**.
 
 ### Typical composition in app `build.yml` (single binary / single image)
 
 ```yaml
 steps:
+  - uses: densestvoid/workflows/.github/actions/detect-changes@v1
+    id: deploy-changes
+    with:
+      paths: |
+        **/*.go
+        go.mod
+        go.sum
+        Dockerfile
+
   - uses: densestvoid/workflows/.github/actions/detect-changes@v1
     id: go-changes
     with:
@@ -323,33 +318,35 @@ steps:
 
   - uses: densestvoid/workflows/.github/actions/build-go@v1
     id: build-go
+    if: steps.go-changes.outputs.changed == 'true'
     with:
       content-key: ${{ steps.go-changes.outputs.content-key }}
       main-package: ./cmd/server
-      # artifact-name defaults to "server"
 
   - uses: densestvoid/workflows/.github/actions/build-docker@v1
     id: docker
+    if: steps.deploy-changes.outputs.changed == 'true'
     with:
       dockerfile: Dockerfile
       artifacts: ${{ steps.build-go.outputs.artifact-name }}
-      local-tag: my-app:local
 
   - uses: densestvoid/workflows/.github/actions/push-container@v1
     id: check
+    if: steps.deploy-changes.outputs.changed == 'true'
     with:
-      local-tag: my-app:local
-      tag: pr-123-${{ steps.docker.outputs.content-key }}
+      image-artifact: ${{ steps.docker.outputs.artifact-name }}
+      tag: pr-123-${{ steps.deploy-changes.outputs.content-key }}
       check-only: true
       ghcr-image: ${{ github.repository }}/my-app
       ghcr-username: ${{ github.actor }}
       ghcr-password: ${{ secrets.GITHUB_TOKEN }}
 
   - uses: densestvoid/workflows/.github/actions/push-container@v1
+    id: push
     if: steps.check.outputs.exists != 'true'
     with:
-      local-tag: my-app:local
-      tag: pr-123-${{ steps.docker.outputs.content-key }}
+      image-artifact: ${{ steps.docker.outputs.artifact-name }}
+      tag: pr-123-${{ steps.deploy-changes.outputs.content-key }}
       ghcr-image: ${{ github.repository }}/my-app
       ghcr-username: ${{ github.actor }}
       ghcr-password: ${{ secrets.GITHUB_TOKEN }}
@@ -370,10 +367,10 @@ Multiple binaries or images: add another **build-go** / **build-docker** / **pus
 |--------|----------------|
 | detect-changes | Sparse: only `paths` globs; minimum history for merge-base |
 | Build Go | Go sources + module files for build |
-| Build Docker | Dockerfile + context files; artifacts downloaded |
-| Push Container | None |
+| Build Docker | Dockerfile + context files; input artifacts downloaded |
+| Push Container | None (downloads image artifact only) |
 | Deploy Terraform | `terraform-dir` only |
-| Terminate Terraform | `terraform-dir` + `pr-destroy` module ref |
+| Terminate Terraform | Workflows-repo `pr-destroy` module only |
 | Notify | None |
 
 Existing **setup-go** does full checkout — acceptable for Go Checks; new actions follow the thin convention above.
@@ -382,12 +379,12 @@ Existing **setup-go** does full checkout — acceptable for Go Checks; new actio
 
 ## Skip / cache behavior
 
-| Layer | v0 step |
-|-------|---------|
-| **CI go-checks** | **detect-changes** (go paths) → `changed` |
-| **Deploy job gate** | **detect-changes** (deploy paths) → `changed` |
-| **Go binary** | **build-go** — `actions/cache` keyed on `content-key` + `main-package` |
-| **Docker image** | **push-container** `check-only` with **build-docker** `content-key`; skip push when `exists` |
+| Layer | Mechanism |
+|-------|-----------|
+| **CI go-checks** | Caller `if:` on **detect-changes** (go paths) → `changed` |
+| **Deploy job gate** | Caller `if:` on **detect-changes** (deploy paths) → `changed` |
+| **Go binary** | **build-go** internal `actions/cache`; caller `if:` decides invocation |
+| **Docker image** | Caller `if:` on **push-container** `exists` after `check-only` |
 
 ---
 
@@ -529,9 +526,12 @@ jobs:
 | Approach | Why |
 |----------|-----|
 | **Deploy Gate** | Superseded by **detect-changes** with deploy paths |
+| **`skip` / `cache-hit` on build actions** | Caller `if:` decides invocation; cache is internal |
+| **`local-tag` handoff** | **build-docker** uploads image artifact; **push-container** loads it |
+| **`content-key` on build-docker** | Image handoff via `artifact-name`; caller supplies registry `tag` |
 | **Write Tfvars** / JSON-only variable maps | Action inputs + optional `variables` block; complex types in Terraform HCL |
-| **Image tag from detect-changes** | Image identity = **build-docker** `content-key` |
-| **build-docker `skip` input** | Registry skip owned by **push-container** `check-only` |
+| **Static tfvars defaults in v0** | Deferred |
+| **`terraform-dir` on terminate** | Empty module lives in workflows repo; destroy from state only |
 | **binaries list on build-go** | One **build-go** step per binary; app composes the graph |
 | **Multiple images in one build-docker** | One **build-docker** step per Dockerfile |
 | **Workflows repo secrets for cross-repo deploy** | Caller `secrets` context only; secrets live in each app repo |
