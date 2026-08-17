@@ -47,42 +47,45 @@ Future steps (same composable pattern): **Release CLI**, **Deploy Static**, etc.
 
 ---
 
-## Build Docker — registry only
+## Build Docker — push to a container registry (caller chooses which)
 
-**Build Docker** must not know about Terraform, tfvars, or deployment targets. It:
+**Build Docker** must not know about Terraform or deployment. It only:
 
-- Confirms or builds and pushes an image to a registry (GHCR by default)
+- Confirms or builds and pushes a container image
 - Outputs: `image_ref`, `image_tag` (and optionally digest)
 
-The caller decides what happens next — **Deploy Terraform**, a future release step, or nothing. Many apps may push to Docker Hub / GHCR without any Terraform step.
+**Registry is an input, not a assumption.** The caller specifies where the image goes:
 
-**Build Go** similarly outputs build artifacts only; no deploy assumptions.
+| Input | Example | Notes |
+|-------|---------|-------|
+| `registry` | `ghcr.io`, `docker.io` | Where to push |
+| `image` | `owner/repo/my-app` | Image path without registry or tag |
+| `image_tag` | `pr-123-abc123` | Often from content hash or caller |
+
+Example targets: GHCR (`ghcr.io`), Docker Hub (`docker.io`), any registry `docker login` supports. Auth is the caller's responsibility (`GITHUB_TOKEN` for GHCR, `DOCKERHUB_TOKEN` in app secrets for Docker Hub, etc.) — **Build Docker** documents required credentials per registry.
+
+The caller decides what happens after push — **Deploy Terraform**, a release step, or nothing.
 
 ---
 
-## Deploy Terraform — variables as inputs, not tfvars files
+## Deploy Terraform — variables via `TF_VAR_*` env, not tfvars files or JSON
 
-**Decision:** Drop **Write Tfvars**. **Deploy Terraform** accepts variables as action inputs. Callers pass non-secret values explicitly; infra secrets are injected from workflows repo repository secrets.
+**Decision:** Drop **Write Tfvars**. Callers pass Terraform variables as **separate `env: TF_VAR_<name>` entries** on the step — native YAML, one variable per line, no JSON map construction.
 
-### Proposed **Deploy Terraform** inputs
+**Deploy Terraform** inputs are only what the action itself needs:
 
 | Input | Purpose |
 |-------|---------|
 | `terraform_dir` | Path to Terraform root module |
 | `backend_key` | S3 state key |
-| `variables` | JSON object of non-secret Terraform variables (e.g. `{"deployment_id":"pr-123","docker_image_tag":"pr-123-abc"}`) |
-| `var_files` | Optional list of committed var-file paths (e.g. `terraform/pr/terraform.tfvars.example` overrides) — only if app uses static files |
 
-Secrets (`DO_TOKEN`, etc.) are **not** in `variables` — **Deploy Terraform** maps workflows repo secrets to `TF_VAR_*` or `-var` internally.
+Infra secrets (`DO_TOKEN`, etc.) are injected inside the action from workflows repo repository secrets as `TF_VAR_*` — not passed by the caller.
 
-### Caller wiring (build → deploy)
+All **non-secret** Terraform variables are set by the caller on the step `env:` block. Terraform reads them automatically.
+
+### Caller wiring
 
 ```yaml
-jobs:
-  build:
-    uses: ./.github/workflows/build.yml
-    # Build Docker outputs image_tag
-
   deploy:
     needs: build
     steps:
@@ -90,27 +93,31 @@ jobs:
         with:
           terraform_dir: terraform/pr
           backend_key: pr/pr-123.tfstate
-          variables: |
-            {
-              "deployment_id": "pr-123",
-              "docker_image_tag": "${{ needs.build.outputs.image_tag }}"
-            }
+        env:
+          TF_VAR_deployment_id: pr-123
+          TF_VAR_docker_image_tag: ${{ needs.build.outputs.image_tag }}
+          TF_VAR_domain_name: ${{ vars.PRODUCTION_DOMAIN }}
 ```
 
-### Issues with dropping tfvars files (and mitigations)
+Each app passes only the `TF_VAR_*` keys its Terraform module defines. No shared schema in the action.
 
-| Issue | Severity | Mitigation |
-|-------|----------|------------|
-| **GitHub Actions inputs are strings** | Low | `variables` is a JSON string; action parses and sets `TF_VAR_*` or `-var` per key |
-| **Complex Terraform types** (objects, maps, lists) | Medium | JSON encoding in `variables` works for most types Terraform accepts via `-var`; document examples for `domain`-style objects. Apps with exotic HCL may use optional `var_files` for static committed files |
-| **Many variables per app** | Low | Each app passes only what its module needs; no shared schema required. Verbose but explicit |
-| **HCL escaping / special characters** | Medium | Action uses `jq` + `terraform -var` with proper quoting; document constraints |
-| **Per-app variable names differ** | Low (feature) | No fixed action input per var — generic JSON map. Budget passes `docker_image_tag`; another app passes different keys |
-| **Checked-in defaults** | Low | Optional `var_files` input for `*.tfvars` committed in app repo; dynamic values from build still passed via `variables` JSON |
-| **Sensitive values in `variables` JSON** | High if misused | Document: never put secrets in `variables`; secrets only via workflows repo secret injection. Action rejects known secret key names? Optional guard |
-| **Debugging** | Low | Action logs variable *keys* applied, not values (or masks values) |
+### Domain / complex types — stay in Terraform, not CI
 
-**Verdict:** Passing variables as inputs is cleaner than **Write Tfvars** — better separation (build doesn't write deploy config), aligns with **Build Docker** having no Terraform knowledge. Optional `var_files` covers edge cases without making file construction a required step.
+CI should pass **scalars only** (`domain_name`, `deployment_id`, `docker_image_tag`). If a module needs a structured value (e.g. `{ hostname, zone }`), the **Terraform module** constructs it in `locals` from scalar inputs — not passed from GitHub Actions.
+
+Budget's `domain` object belongs inside `terraform/` HCL, not in the deploy step env.
+
+### Static defaults
+
+Committed defaults live in the app repo as `*.auto.tfvars` or `variables.tf` defaults — Terraform picks them up without CI wiring. Dynamic values (image tag from build) are the only ones set via `TF_VAR_*` at deploy time.
+
+### Tradeoffs vs JSON map
+
+| Approach | Pros | Cons |
+|----------|------|------|
+| **`env: TF_VAR_*` per var** (chosen) | Explicit, no JSON, native GHA YAML, one arg per variable | Verbose for many vars; typos in var names fail at terraform plan |
+| JSON map input | Compact | Awkward construction; user preference against it |
+| tfvars file construction | Familiar to terraform users | Extra step; build/deploy coupling |
 
 ---
 
@@ -199,8 +206,10 @@ jobs:
         with:
           terraform_dir: terraform/pr
           backend_key: pr/pr-${{ ... }}.tfstate
-          variables: |
-            {"deployment_id":"pr-${{ ... }}","docker_image_tag":"${{ needs.build.outputs.image_tag }}"}
+        env:
+          TF_VAR_deployment_id: pr-${{ ... }}
+          TF_VAR_docker_image_tag: ${{ needs.build.outputs.image_tag }}
+          TF_VAR_domain_name: ${{ vars.PRODUCTION_DOMAIN }}
 
   prepare-notify:
     needs: [gate, build, deploy]
@@ -232,7 +241,7 @@ PR #21 (independent). Budget migration deferred until v1 after krogerrecipeshopp
 
 | Approach | Why |
 |----------|-----|
-| **Write Tfvars** action | Variables pass directly to **Deploy Terraform**; build steps don't write deploy config |
+| **Write Tfvars** / JSON variable maps | Callers pass `env: TF_VAR_*` per variable; complex types built in Terraform HCL |
 | Build Docker knows about Terraform | Registry push only; caller wires deploy separately |
 | Full orchestrator workflows in workflows repo | Too thick; apps compose steps |
 | `workflow_dispatch` central runner | Black box |
