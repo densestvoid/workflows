@@ -19,10 +19,10 @@ app repo     = assembly instructions
 Example compositions (app-defined):
 
 ```
-detect-changes → Go Checks (skip when unchanged)
-Deploy Gate → build.yml → Deploy Terraform → prepare-notify → Notify
-Deploy Gate → build.yml → Release CLI → prepare-notify → Notify
-Deploy Gate → Build Docker → Push Container → Notify   # image to registry only
+detect-changes (go paths) → Go Checks (skip when unchanged)
+detect-changes (deploy paths) → build.yml → Deploy Terraform → Notify
+detect-changes (deploy paths) → build.yml → Release CLI → Notify
+detect-changes (deploy paths) → Build Docker → Push Container → Notify
 ```
 
 ---
@@ -39,7 +39,7 @@ Everything that needs to be a secret or variable lives in the **app repo** (repo
 
 **Deploy Terraform** and **Terminate Terraform** accept infra credentials as **action inputs** — caller passes `${{ secrets.* }}` from that app repo’s own secret store. Duplication across repos is accepted for now; the app-deploy-template documents the required secret names once.
 
-Workflows-repo repository secrets are **not** visible to cross-repo callers anyway (see above). Composite actions for all v0 steps.
+Composite actions for all v0 steps.
 
 **Rejected:** Central `workflow_dispatch` runner in workflows repo (black box; needs broad repo access).
 
@@ -51,11 +51,10 @@ Workflows-repo repository secrets are **not** visible to cross-repo callers anyw
 
 | Name | Directory | Purpose |
 |------|-----------|---------|
-| **Detect Changes** | `detect-changes/` | Composable pre-CI check: path-pattern diff + content hash; skip signal for CI and build |
+| **Detect Changes** | `detect-changes/` | Path-pattern diff + content hash for **any** caller-supplied paths (CI skip, deploy gating, cache keys) |
 | **Build Go** | `build-go/` | Cached Go binary build — **one binary per invocation**; **no Docker awareness** |
 | **Build Docker** | `build-docker/` | Local `docker buildx` — **one image per invocation**; receives binaries via **artifacts** |
 | **Push Container** | `push-container/` | Push to all configured registries in one step (Notify-style multiplex) |
-| **Deploy Gate** | `deploy-gate/` | Deployable path diff vs `main`; **checks out what it needs** |
 | **Deploy Terraform** | `deploy-terraform/` | Terraform init + apply; variables as **action inputs** |
 | **Terminate Terraform** | `terminate-terraform/` | Destroy via `pr-destroy` empty-module pattern; **delete S3 state file on success** |
 | **Notify** | `notify/` | Slack + PR comment delivery; **text passed as input vars** |
@@ -67,11 +66,11 @@ Workflows-repo repository secrets are **not** visible to cross-repo callers anyw
 | `setup/` | `setup-go/` | Checkout + Go toolchain setup |
 | `install-tool/` | `install-go-tool/` | Install + **cache** a Go CLI tool (`actions/cache` on `~/go/bin/…`) |
 
-**Go Checks** (`go-checks.yml`) stays as-is; update to use renamed actions. Pairs with **detect-changes** in app repos.
+**Go Checks** (`go-checks.yml`) — update to use renamed actions. App repos call **detect-changes** separately (e.g. Go paths for CI skip).
 
 Future steps (same composable pattern): **Release CLI**, **Deploy Static**, etc.
 
-**Removed:** **Write Tfvars**, full orchestrator workflows, `workflow_dispatch` central runner, **establish VPC** (VPC is app Terraform logic — erroneously included in an earlier rollout draft; not workflows-repo scope).
+**Removed:** **Deploy Gate** (superseded by **detect-changes** with deploy paths), **Write Tfvars**, full orchestrator workflows, `workflow_dispatch` central runner, **establish VPC**.
 
 ---
 
@@ -79,63 +78,79 @@ Future steps (same composable pattern): **Release CLI**, **Deploy Static**, etc.
 
 Established by `install-go-tool/` — new actions that produce or consume cacheable work should follow the same pattern:
 
-1. **Key** — content hash from **detect-changes** (`content-key`) or action-specific inputs
+1. **Key** — action-specific (see below)
 2. **Restore** — `actions/cache` with exact key + `restore-keys` prefix fallback
 3. **Skip** — on cache hit, skip expensive work and expose `cache-hit` output
 4. **Save** — on miss, run work then let cache action save at step end
 
-Applies to: **build-go** (compiled binaries), **build-docker** (image layers where applicable), **install-go-tool** (already implements this).
+| Action | Cache key |
+|--------|-----------|
+| **build-go** | `content-key` (from detect-changes) + `main-package` |
+| **build-docker** | Own `content-key` (dockerfile + context + artifacts) |
+| **install-go-tool** | `tool-package` + `tool-version` |
 
 ---
 
+## Per-action contracts
+
 ### Detect Changes (`detect-changes`)
 
-Generalized path-pattern change detection — not Go-specific. Caller supplies the globs to watch.
+Generalized change detection for **any** path set — not language-specific. Caller supplies the globs; same action handles CI skip, deploy gating, and source cache keys.
 
 | Input | Purpose |
 |-------|---------|
-| `paths` | Multiline glob patterns to include in diff + hash (e.g. `**/*.go`, `go.mod`, `go.sum`) |
+| `paths` | Multiline glob patterns to include in diff + hash |
 | `base-ref` | Ref to diff against (default `main`) |
 
 | Output | Purpose |
 |--------|---------|
 | `changed` | `true` when any matched path changed vs base |
-| `content-key` | Content hash for cache/skip decisions (**owned here**, not Build Go) |
+| `content-key` | Content hash of matched paths (for **build-go** cache and coarse skip signals) |
 
-**Checkout:** Sparse — only files matching `paths`. Own checkout; caller does not pre-checkout.
+**Checkout:** Sparse — only files matching `paths`. Minimum git history for merge-base. Own checkout; caller does not pre-checkout.
 
-Example (Go Checks skip):
+Examples:
 
 ```yaml
+# Go Checks skip
 - uses: densestvoid/workflows/.github/actions/detect-changes@v1
-  id: changes
+  id: go-changes
   with:
     paths: |
       **/*.go
       go.mod
       go.sum
+
+# Deploy job gate (replaces deploy-gate)
+- uses: densestvoid/workflows/.github/actions/detect-changes@v1
+  id: deploy-changes
+  with:
+    paths: |
+      terraform/**
+      cmd/**
+      Dockerfile
 ```
 
 ---
 
 ### Build Go
 
-**One binary per invocation.** Multiple binaries in a repo → multiple **build-go** steps in the app workflow (not a list input on one step).
+**One binary per invocation.** Multiple binaries → multiple **build-go** steps in the app workflow.
 
-**Must not know about Docker.** Builds and uploads one binary artifact. Uses **caching pattern** keyed on `content-key`.
+**Must not know about Docker.** Builds and uploads one binary artifact. Uses **caching pattern**.
 
 | Input | Purpose |
 |-------|---------|
 | `working-directory` | Go module root |
-| `content-key` | Cache key from **detect-changes** (or caller) |
+| `content-key` | From **detect-changes** (or caller) |
 | `main-package` | Package path to build (e.g. `./cmd/server`) |
-| `artifact-name` | Name for the uploaded artifact (caller-defined, for downstream `build-docker`) |
+| `artifact-name` | Optional. Default: **basename of `main-package`** (e.g. `./cmd/server` → `server`) |
 | `skip` | Skip build when cache hit |
 
 | Output | Purpose |
 |--------|---------|
 | `cache-hit` | Whether build was skipped |
-| `artifact-name` | Echo of input — artifact containing the built binary |
+| `artifact-name` | Resolved artifact name (default or override) |
 
 **Artifact:** Preserves output path layout so Dockerfile `COPY` paths need no remapping.
 
@@ -147,20 +162,21 @@ Example (Go Checks skip):
 
 **One image per invocation.** Multiple Dockerfiles → multiple **build-docker** steps in the app workflow.
 
+Computes `content-key` from dockerfile + context + downloaded artifact hashes **before** `docker build`. This is the authoritative image identity for registry tags — not `detect-changes`.
+
 | Input | Purpose |
 |-------|---------|
 | `context` | Docker build context |
 | `dockerfile` | Dockerfile path |
 | `local-tag` | Local image tag (e.g. `my-app:local`) |
 | `artifacts` | Multiline list of artifact names to download (from one or more **build-go** steps) |
-| `skip` | Skip when image already exists remotely |
 
 | Output | Purpose |
 |--------|---------|
 | `local-tag` | Tag loaded in local daemon |
-| `content-key` | Content hash for image tag / skip decisions |
+| `content-key` | Image content hash — use for **push-container** `tag` and `check-only` |
 
-Downloads listed artifacts into the build context preserving paths — Dockerfile `COPY` paths are fixed in the image definition.
+Registry skip is owned by **push-container** `check-only` — no `skip` input on build-docker.
 
 **No registry, no push, no Terraform.**
 
@@ -185,9 +201,9 @@ Single action, **multiplexed across registries** — same pattern as **Notify**.
 
 | Input | Purpose |
 |-------|---------|
-| `local-tag` | Local image tag (from **Build Docker**) |
-| `tag` | Remote tag (e.g. content-hash tag from **build-docker** `content-key`) |
-| `check-only` | Manifest inspect only — no push |
+| `local-tag` | Local image tag (from **build-docker**) |
+| `tag` | Remote tag — use **`build-docker` `content-key`** (not detect-changes) |
+| `check-only` | Manifest inspect only — no push; drives registry skip |
 
 **Per-registry inputs (all optional):**
 
@@ -196,32 +212,17 @@ Single action, **multiplexed across registries** — same pattern as **Notify**.
 | **GHCR** | `ghcr-image`, `ghcr-username`, `ghcr-password` |
 | **Docker Hub** | `dockerhub-image`, `dockerhub-username`, `dockerhub-password` |
 
-**Outputs:** Per-registry `*_image_ref`, `*_pushed`, `*_exists`; aggregate `exists` — `true` when **all configured** registries already have the manifest.
+**Outputs:** Per-registry `*_image_ref`, `*_pushed`, `*_exists`; aggregate `exists`; **`image-ref`** — primary registry image reference for downstream (e.g. `TF_VAR_docker_image_tag`).
 
 **Checkout:** None (operates on local Docker image only).
 
----
-
-### Deploy Gate
-
-Encapsulates its own checkout so callers don’t need git history for gating.
-
-| Input | Purpose |
-|-------|---------|
-| `base-ref` | Branch to diff against (default `main`) |
-| `paths` | Glob list of deployable paths (app-defined) |
-
-| Output | Purpose |
-|--------|---------|
-| `should-deploy` | `true` when deployable paths changed vs base |
-
-**Checkout:** Sparse — only the `paths` globs. Fetch the minimum git history needed for merge-base against `base-ref` (may require deeper fetch than `fetch-depth: 1`, but never checks out unrelated paths or files). Principle: **exactly what this action needs, no more** — not a full-repo clone.
+**Multi-image:** Each **build-docker** → **push-container** pair has its own `local-tag`, `content-key`, and `check-only`/`push` cycle.
 
 ---
 
 ### Deploy Terraform
 
-Variables as **action inputs** (`with:`), not caller-defined `env: TF_VAR_*`. The action maps inputs → Terraform variables internally. Avoids env-var boilerplate on every caller step.
+Variables as **action inputs** (`with:`), not caller-defined `env: TF_VAR_*`. The action maps inputs → Terraform variables internally.
 
 Infra secrets (`do-token`, `terraform-aws-s3-*`) are **action inputs** — caller passes from that repo’s secrets.
 
@@ -244,7 +245,7 @@ Infra secrets (`do-token`, `terraform-aws-s3-*`) are **action inputs** — calle
 
 **Static defaults:** `*.auto.tfvars` / `variables.tf` defaults in app repo; CI only passes dynamic values (image tag, deployment id).
 
-**Checkout:** Thin — `terraform-dir` only (+ workflows-repo `pr-destroy` module reference for terminate, not deploy).
+**Checkout:** Sparse — `terraform-dir` only.
 
 #### Inputs vs `TF_VAR_*` env
 
@@ -272,7 +273,7 @@ Same `pr-destroy` empty-module pattern as budget today. Empty destroy module liv
 | `destroyed` | `true` on success |
 | `state-deleted` | `true` when S3 state file removed |
 
-**Checkout:** Thin — app `terraform-dir` + workflows-repo destroy module.
+**Checkout:** Sparse — app `terraform-dir` + workflows-repo `pr-destroy` module.
 
 ---
 
@@ -294,9 +295,9 @@ Minimal delivery wrapper. **App repos own all message construction** — workflo
 
 ---
 
-## Build / deploy job separation
+## Build / deploy composition
 
-Separate jobs in app repos. **Compose by repeating steps** — one **build-go** per binary, one **build-docker** per Dockerfile:
+**Compose by repeating steps** — one **build-go** per binary, one **build-docker** per Dockerfile, one **push-container** cycle per image:
 
 ```
 build-go (server) ─┐
@@ -304,50 +305,51 @@ build-go (worker) ─┼→ build-docker (api) → push-container → Deploy Ter
                    └→ build-docker (worker) → push-container
 ```
 
-Caller uses **detect-changes** / **Push Container** `exists` for skip logic. When `exists == true`, skip build and push — go straight to deploy.
+**Registry skip:** **push-container** `check-only` with tag from **`build-docker` `content-key`**. When `exists`, skip push.
+
+**Jobs vs steps:** Whether build and deploy run in the same job (shared workspace) or separate jobs (artifact upload/download between jobs) is **left to app repos**. The actions support both; cross-job composition requires explicit artifact handoff in the app workflow.
 
 ### Typical composition in app `build.yml` (single binary / single image)
 
 ```yaml
 steps:
   - uses: densestvoid/workflows/.github/actions/detect-changes@v1
-    id: changes
+    id: go-changes
     with:
       paths: |
         **/*.go
         go.mod
         go.sum
 
-  - uses: densestvoid/workflows/.github/actions/push-container@v1
-    id: check
-    with:
-      local-tag: my-app:local
-      tag: pr-123-${{ steps.changes.outputs.content-key }}
-      check-only: true
-      ghcr-image: ${{ github.repository }}/my-app
-      ghcr-username: ${{ github.actor }}
-      ghcr-password: ${{ secrets.GITHUB_TOKEN }}
-
   - uses: densestvoid/workflows/.github/actions/build-go@v1
     id: build-go
-    if: steps.check.outputs.exists != 'true'
     with:
-      content-key: ${{ steps.changes.outputs.content-key }}
+      content-key: ${{ steps.go-changes.outputs.content-key }}
       main-package: ./cmd/server
-      artifact-name: server-binary
+      # artifact-name defaults to "server"
 
   - uses: densestvoid/workflows/.github/actions/build-docker@v1
-    if: steps.check.outputs.exists != 'true'
+    id: docker
     with:
       dockerfile: Dockerfile
       artifacts: ${{ steps.build-go.outputs.artifact-name }}
       local-tag: my-app:local
 
   - uses: densestvoid/workflows/.github/actions/push-container@v1
+    id: check
+    with:
+      local-tag: my-app:local
+      tag: pr-123-${{ steps.docker.outputs.content-key }}
+      check-only: true
+      ghcr-image: ${{ github.repository }}/my-app
+      ghcr-username: ${{ github.actor }}
+      ghcr-password: ${{ secrets.GITHUB_TOKEN }}
+
+  - uses: densestvoid/workflows/.github/actions/push-container@v1
     if: steps.check.outputs.exists != 'true'
     with:
       local-tag: my-app:local
-      tag: pr-123-${{ steps.changes.outputs.content-key }}
+      tag: pr-123-${{ steps.docker.outputs.content-key }}
       ghcr-image: ${{ github.repository }}/my-app
       ghcr-username: ${{ github.actor }}
       ghcr-password: ${{ secrets.GITHUB_TOKEN }}
@@ -356,7 +358,7 @@ steps:
       dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
 
-Multiple binaries or images: add another **build-go** / **build-docker** block each — app workflow owns the graph.
+Multiple binaries or images: add another **build-go** / **build-docker** / **push-container** block each.
 
 ---
 
@@ -366,16 +368,15 @@ Multiple binaries or images: add another **build-go** / **build-docker** block e
 
 | Action | Checkout scope |
 |--------|----------------|
-| detect-changes | Sparse: only `paths` globs |
+| detect-changes | Sparse: only `paths` globs; minimum history for merge-base |
 | Build Go | Go sources + module files for build |
 | Build Docker | Dockerfile + context files; artifacts downloaded |
 | Push Container | None |
-| Deploy Gate | Sparse: deployable `paths` only; minimum history for merge-base |
 | Deploy Terraform | `terraform-dir` only |
-| Terminate Terraform | `terraform-dir` + destroy module ref |
+| Terminate Terraform | `terraform-dir` + `pr-destroy` module ref |
 | Notify | None |
 
-Existing **setup-go** action does full checkout today — acceptable for Go Checks; new actions follow the thin convention above.
+Existing **setup-go** does full checkout — acceptable for Go Checks; new actions follow the thin convention above.
 
 ---
 
@@ -383,10 +384,10 @@ Existing **setup-go** action does full checkout today — acceptable for Go Chec
 
 | Layer | v0 step |
 |-------|---------|
-| **CI go-checks** | **detect-changes** → `changed` |
-| **PR deploy gate** | **Deploy Gate** → `should-deploy` |
-| **Go binary** | **Build Go** — `actions/cache` keyed on `content-key` |
-| **Docker image** | **Push Container** `exists`; caller skips build when true |
+| **CI go-checks** | **detect-changes** (go paths) → `changed` |
+| **Deploy job gate** | **detect-changes** (deploy paths) → `changed` |
+| **Go binary** | **build-go** — `actions/cache` keyed on `content-key` + `main-package` |
+| **Docker image** | **push-container** `check-only` with **build-docker** `content-key`; skip push when `exists` |
 
 ---
 
@@ -403,7 +404,7 @@ uses: densestvoid/workflows/.github/actions/build-go@v1
 uses: densestvoid/workflows/.github/actions/deploy-terraform@v1
 ```
 
-Both `@v1` resolve to the **same commit**. Bump all pins together when releasing. Simple, conventional, no redundant naming.
+Both `@v1` resolve to the **same commit**. Bump all pins together when releasing.
 
 | Ref | When |
 |-----|------|
@@ -413,17 +414,11 @@ Both `@v1` resolve to the **same commit**. Bump all pins together when releasing
 
 ### Escape hatch: independent per-action versions
 
-If one action needs to ship a fix without cutting a full toolbox release, use **namespaced git tags** — version in the ref, not the directory:
-
 ```yaml
 uses: densestvoid/workflows/.github/actions/deploy-terraform@deploy-terraform/v1.1.0
 ```
 
-Tag `deploy-terraform/v1.1.0` points at a commit; only callers of that action need to update. Avoid `@build-go-v1` style tags — redundant with the path and awkward to read.
-
-**Rejected:** Version baked into action directory names (`build-go-v1/`); version repeated in tag and path (`@build-go-v1`).
-
-**Go Checks** reusable workflow: `uses: densestvoid/workflows/.github/workflows/go-checks.yml@v1` (same coupled ref).
+**Go Checks:** `uses: densestvoid/workflows/.github/workflows/go-checks.yml@v1` (same coupled ref).
 
 ---
 
@@ -432,27 +427,17 @@ Tag `deploy-terraform/v1.1.0` points at a commit; only callers of that action ne
 | Phase | Scope | Repos touched |
 |-------|-------|---------------|
 | **v0** | Build composable actions in workflows repo | `workflows` |
-| **v0 test** | Validate composition with **krogerrecipeshopper** (Go + Terraform; deployment details TBD — likely very similar to budget post-migration) | `workflows`, `krogerrecipeshopper` |
-| **v1** | Cut `@v1` repo tag; create `densestvoid/app-deploy-template` GitHub template repo | `workflows`, `app-deploy-template` |
+| **v0 test** | Validate composition with **krogerrecipeshopper** | `workflows`, `krogerrecipeshopper` |
+| **v1** | Cut `@v1` repo tag; create `densestvoid/app-deploy-template` | `workflows`, `app-deploy-template` |
 | **v1 migrate** | Update **budget** to composed steps | `budget` |
 
-**Budget is last** — not touched during v0 iteration. **Krogerrecipeshopper** is the proving ground.
-
-**Testing strategy:** Integration test via kroger repo — not unit tests in workflows repo.
-
-**Removed from v0:** “establish shared VPC / infra foundations” — VPC and network logic belong in each app’s Terraform (e.g. budget deployment module), not the workflows toolbox.
+**Budget is last.** Integration test via kroger — not unit tests in workflows repo.
 
 ---
 
 ## GitHub template repository (v1)
 
-Separate repo: `densestvoid/app-deploy-template`
-
-- Enable **Settings → Template repository**
-- Example compositions pinned at `@v1`
-- `gh repo create my-app --template densestvoid/app-deploy-template`
-
-Workflows repo stays actions-only — no template files inside it.
+Separate repo: `densestvoid/app-deploy-template` — template repository with example compositions pinned at `@v1`.
 
 ---
 
@@ -470,12 +455,11 @@ densestvoid/workflows/
 │   │   ├── build-go/
 │   │   ├── build-docker/
 │   │   ├── push-container/
-│   │   ├── deploy-gate/
 │   │   ├── deploy-terraform/
 │   │   ├── terminate-terraform/
 │   │   └── notify/
 │   └── terraform/
-│       └── pr-destroy/          # empty module for Terminate Terraform
+│       └── pr-destroy/
 └── README.md
 ```
 
@@ -486,20 +470,30 @@ densestvoid/workflows/
 ```yaml
 jobs:
   gate:
+    runs-on: ubuntu-latest
+    outputs:
+      changed: ${{ steps.deploy-changes.outputs.changed }}
     steps:
-      - uses: densestvoid/workflows/.github/actions/deploy-gate@v1
+      - uses: densestvoid/workflows/.github/actions/detect-changes@v1
+        id: deploy-changes
         with:
           paths: |
             terraform/**
             cmd/**
+            Dockerfile
 
   build:
     needs: gate
-    if: needs.gate.outputs.should-deploy == 'true'
-  # ... build.yml: detect-changes → push-container check → build-go → build-docker → push-container
+    if: needs.gate.outputs.changed == 'true'
+    runs-on: ubuntu-latest
+    outputs:
+      image-ref: ${{ steps.push.outputs.image-ref }}
+    steps:
+      # ... build-go → build-docker → push-container (see build.yml above)
 
   deploy:
     needs: build
+    runs-on: ubuntu-latest
     steps:
       - uses: densestvoid/workflows/.github/actions/deploy-terraform@v1
         with:
@@ -511,12 +505,13 @@ jobs:
           terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
           variables: |
             deployment_id=pr-${{ github.event.pull_request.number }}
-            docker_image_tag=${{ needs.build.outputs.image_tag }}
+            docker_image_tag=${{ needs.build.outputs.image-ref }}
             domain_name=${{ vars.PRODUCTION_DOMAIN }}
 
   notify:
     needs: [gate, build, deploy]
     if: always()
+    runs-on: ubuntu-latest
     steps:
       - uses: densestvoid/workflows/.github/actions/notify@v1
         with:
@@ -527,17 +522,16 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-App jobs construct `notify-slack-text` / `notify-pr-body` however they want — Notify only delivers.
-
 ---
 
 ## Rejected
 
 | Approach | Why |
 |----------|-----|
+| **Deploy Gate** | Superseded by **detect-changes** with deploy paths |
 | **Write Tfvars** / JSON-only variable maps | Action inputs + optional `variables` block; complex types in Terraform HCL |
-| **Build Go knows docker/content keys** | Hash owned by **detect-changes**; binary via artifacts |
-| **Go-specific change detection** | Generalized **detect-changes** with caller-supplied `paths` |
+| **Image tag from detect-changes** | Image identity = **build-docker** `content-key` |
+| **build-docker `skip` input** | Registry skip owned by **push-container** `check-only` |
 | **binaries list on build-go** | One **build-go** step per binary; app composes the graph |
 | **Multiple images in one build-docker** | One **build-docker** step per Dockerfile |
 | **Workflows repo secrets for cross-repo deploy** | Caller `secrets` context only; secrets live in each app repo |
@@ -546,5 +540,5 @@ App jobs construct `notify-slack-text` / `notify-pr-body` however they want — 
 | Full orchestrator workflows in workflows repo | Too thick; apps compose steps |
 | `workflow_dispatch` central runner | Black box |
 | Budget-first migration | Krogerrecipeshopper validates v0 first |
-| **Establish VPC in workflows repo** | App Terraform concern; erroneously pulled into rollout draft |
+| **Establish VPC in workflows repo** | App Terraform concern |
 | Version in action directory or tag name (`@build-go-v1`) | Version in git ref only (`@v1` or `deploy-terraform/v1.1.0`) |
