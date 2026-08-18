@@ -1,8 +1,8 @@
 name: 'Build Docker'
 description: 'Build one Docker image and upload as artifact (BuildKit GHA layer cache)'
 inputs:
-  context:
-    description: 'Docker build context'
+  context-path:
+    description: 'Docker build context path'
     required: false
     default: '.'
   dockerfile:
@@ -10,29 +10,42 @@ inputs:
     required: false
     default: 'Dockerfile'
   artifacts:
-    description: 'Multiline list of artifact names to download from build-go'
+    description: 'Multiline list of workflow artifact names to download into context-path before build'
     required: false
     default: ''
   artifact-name:
-    description: 'Output artifact name (default: basename of dockerfile)'
-    required: false
-    default: ''
-  cache-scope:
-    description: 'BuildKit GHA cache scope (default: artifact name)'
+    description: 'Output artifact name (default: basename of dockerfile, or image when dockerfile is Dockerfile)'
     required: false
     default: ''
 outputs:
   artifact-name:
     description: 'Uploaded image artifact name'
-    value: ${{ steps.meta.outputs.artifact-name }}
+    value: ${{ steps.build.outputs.artifact-name }}
 runs:
   using: 'composite'
   steps:
-    - name: Resolve inputs
-      id: meta
+    - name: Checkout Docker context
+      uses: actions/checkout@v7
+
+    - name: Download input artifacts
+      if: ${{ inputs.artifacts != '' }}
       shell: bash
       run: |
         set -euo pipefail
+        while IFS= read -r name; do
+          [ -z "$name" ] && continue
+          gh run download "$GITHUB_RUN_ID" --name "$name" --dir "${{ inputs.context-path }}"
+        done <<< '${{ inputs.artifacts }}'
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Build and save image
+      id: build
+      shell: bash
+      run: |
+        set -euo pipefail
+
         DOCKERFILE="${{ inputs.dockerfile }}"
         ARTIFACT_NAME="${{ inputs.artifact-name }}"
         if [ -z "$ARTIFACT_NAME" ]; then
@@ -41,53 +54,18 @@ runs:
             ARTIFACT_NAME="image"
           fi
         fi
-        CACHE_SCOPE="${{ inputs.cache-scope }}"
-        if [ -z "$CACHE_SCOPE" ]; then
-          CACHE_SCOPE="$ARTIFACT_NAME"
-        fi
         echo "artifact-name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
-        echo "dockerfile=${DOCKERFILE}" >> "$GITHUB_OUTPUT"
-        echo "cache-scope=${CACHE_SCOPE}" >> "$GITHUB_OUTPUT"
 
-    - name: Checkout Docker context
-      uses: actions/checkout@v7
-
-    - name: Download input artifacts
-      if: ${{ inputs.artifacts != '' }}
-      shell: bash
-      env:
-        ARTIFACTS: ${{ inputs.artifacts }}
-        CONTEXT: ${{ inputs.context }}
-        GH_TOKEN: ${{ github.token }}
-      run: |
-        set -euo pipefail
-        while IFS= read -r name; do
-          [ -z "$name" ] && continue
-          gh run download "$GITHUB_RUN_ID" --name "$name" --dir "$CONTEXT"
-        done <<< "$ARTIFACTS"
-
-    - name: Set up Docker Buildx
-      uses: docker/setup-buildx-action@v4
-
-    - name: Build and save image
-      shell: bash
-      env:
-        CONTEXT: ${{ inputs.context }}
-        DOCKERFILE: ${{ steps.meta.outputs.dockerfile }}
-        ARTIFACT_NAME: ${{ steps.meta.outputs.artifact-name }}
-        CACHE_SCOPE: ${{ steps.meta.outputs.cache-scope }}
-        LOCAL_TAG: build-docker-local:${{ steps.meta.outputs.artifact-name }}
-      run: |
-        set -euo pipefail
+        LOCAL_TAG="build-docker-local:${ARTIFACT_NAME}"
         IMAGE_TAR="${{ runner.temp }}/build-docker-${ARTIFACT_NAME}.tar"
 
         docker buildx build \
           --file "$DOCKERFILE" \
           --tag "$LOCAL_TAG" \
-          --cache-from "type=gha,scope=${CACHE_SCOPE}" \
-          --cache-to "type=gha,scope=${CACHE_SCOPE},mode=max" \
+          --cache-from "type=gha,scope=${ARTIFACT_NAME}" \
+          --cache-to "type=gha,scope=${ARTIFACT_NAME},mode=max" \
           --load \
-          "$CONTEXT"
+          "${{ inputs.context-path }}"
 
         docker save "$LOCAL_TAG" -o "$IMAGE_TAR"
         cp "$IMAGE_TAR" "${ARTIFACT_NAME}.tar"
@@ -95,6 +73,6 @@ runs:
     - name: Upload image artifact
       uses: actions/upload-artifact@v7
       with:
-        name: ${{ steps.meta.outputs.artifact-name }}
-        path: ${{ format('{0}.tar', steps.meta.outputs.artifact-name) }}
+        name: ${{ steps.build.outputs.artifact-name }}
+        path: ${{ format('{0}.tar', steps.build.outputs.artifact-name) }}
         if-no-files-found: error

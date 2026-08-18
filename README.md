@@ -226,7 +226,7 @@ Call once per output. Or run `terraform output -raw <name>` directly — `setup-
 
 ### build-docker artifacts
 
-**build-docker** downloads **build-go** artifacts via `gh run download` in the same workflow run. Split build and docker across jobs only if the caller downloads artifacts between jobs.
+**build-docker** optionally downloads workflow artifacts into `context-path` via `gh run download` before build (same workflow run). Split build and docker across jobs only if the caller downloads artifacts between jobs.
 
 ## Known limitations (v0)
 
