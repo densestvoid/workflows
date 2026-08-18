@@ -70,24 +70,17 @@ steps:
       dockerfile: Dockerfile
 
   - uses: densestvoid/workflows/.github/actions/push-container@main
-    id: check
+    id: push
     if: steps.deploy-changes.outputs.changed == 'true'
     with:
       image-artifact: ${{ steps.docker.outputs.artifact-name }}
       tag: pr-123-${{ steps.deploy-changes.outputs.content-key }}
-      check-only: true
       ghcr-image: ${{ github.repository }}/my-app
       ghcr-username: ${{ github.actor }}
       ghcr-password: ${{ secrets.GITHUB_TOKEN }}
-
-  - uses: densestvoid/workflows/.github/actions/push-container@main
-    if: steps.check.outputs.exists != 'true'
-    with:
-      image-artifact: ${{ steps.docker.outputs.artifact-name }}
-      tag: pr-123-${{ steps.deploy-changes.outputs.content-key }}
-      ghcr-image: ${{ github.repository }}/my-app
-      ghcr-username: ${{ github.actor }}
-      ghcr-password: ${{ secrets.GITHUB_TOKEN }}
+      dockerhub-image: myuser/my-app
+      dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
+      dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
 
 ## Repository structure

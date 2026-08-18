@@ -64,7 +64,7 @@ Composite actions for all v0 steps.
 | Current | Rename to | Purpose |
 |---------|-----------|---------|
 | `setup/` | `setup-go/` | Checkout + Go toolchain setup |
-| `install-tool/` | `install-go-tool/` | Install + **cache** a Go CLI tool (`actions/cache` on `~/go/bin/…`) |
+| `install-tool/` | `install-go-tool/` | Install + **cache** a Go CLI tool (`actions/cache` on `~/go/bin/<tool>`) |
 
 **Go Checks** (`go-checks.yml`) — update to use renamed actions. App repos call **detect-changes** separately (e.g. Go paths for CI skip).
 
@@ -189,13 +189,12 @@ Whether to call **build-docker** is a **caller `if:`** decision. Cache restore i
 
 ### Push Container
 
-Multiplexed across registries. Try **all configured** registries; skip unset; **fail if any configured registry fails**.
+Load image artifact and push to **all configured** registries. Skip unset registries; **fail if any configured registry fails**. No manifest checks or cache logic — callers gate invocation via **detect-changes** / **build-docker** cache.
 
 | Input | Purpose |
 |-------|---------|
 | `image-artifact` | Artifact name from **build-docker** (downloads, `docker load`) |
 | `tag` | Remote registry tag (caller-supplied) |
-| `check-only` | Manifest inspect only — no push |
 
 **Per-registry inputs (all optional):**
 
@@ -204,9 +203,9 @@ Multiplexed across registries. Try **all configured** registries; skip unset; **
 | **GHCR** | `ghcr-image`, `ghcr-username`, `ghcr-password` |
 | **Docker Hub** | `dockerhub-image`, `dockerhub-username`, `dockerhub-password` |
 
-**Outputs:** Per-registry `*_image_ref`, `*_pushed`, `*_exists`; aggregate `exists`; **`image-ref`** — primary registry image reference for downstream (e.g. Terraform).
+**Outputs:** Per-registry `*_image_ref`, `*_pushed`; **`image-ref`** — primary registry image reference for downstream (e.g. Terraform).
 
-Whether to call **push-container** (or call with `check-only` first) is a **caller `if:`** decision.
+Whether to call **push-container** is a **caller `if:`** decision (typically gated on **detect-changes** `changed`).
 
 **Checkout:** None.
 
@@ -243,7 +242,7 @@ Infra secrets (`do-token`, `terraform-aws-s3-*`) are **action inputs** — calle
 
 Action inputs → `terraform apply -var key=value` flags. No tfvars file writes. S3 backend credentials remain as `AWS_*` env (backend config, not TF variables).
 
-**Not in this action:** skip-on-same-image / image-exists checks — caller composes **push-container** `check-only` + workflow `if:` before invoking deploy.
+**Not in this action:** image-exists / registry cache checks — **build-docker** internal cache and caller `if:` on **detect-changes** handle skip decisions.
 
 ---
 
@@ -304,7 +303,7 @@ build-go (worker) ─┼→ build-docker (api) → push-container → Deploy Ter
                    └→ build-docker (worker) → push-container
 ```
 
-**Skip logic:** Callers use **detect-changes** `changed` / `content-key` and **push-container** `exists` in workflow `if:` conditions — actions are not invoked when there is nothing to do.
+**Skip logic:** Callers use **detect-changes** `changed` / `content-key` in workflow `if:` conditions — build actions handle caching internally.
 
 **Jobs vs steps:** Whether build and deploy run in the same job (shared workspace) or separate jobs (artifact upload/download between jobs) is **left to app repos**.
 
@@ -344,19 +343,8 @@ steps:
       artifacts: ${{ steps.build-go.outputs.artifact-name }}
 
   - uses: densestvoid/workflows/.github/actions/push-container@v1
-    id: check
-    if: steps.deploy-changes.outputs.changed == 'true'
-    with:
-      image-artifact: ${{ steps.docker.outputs.artifact-name }}
-      tag: pr-123-${{ steps.deploy-changes.outputs.content-key }}
-      check-only: true
-      ghcr-image: ${{ github.repository }}/my-app
-      ghcr-username: ${{ github.actor }}
-      ghcr-password: ${{ secrets.GITHUB_TOKEN }}
-
-  - uses: densestvoid/workflows/.github/actions/push-container@v1
     id: push
-    if: steps.check.outputs.exists != 'true'
+    if: steps.deploy-changes.outputs.changed == 'true'
     with:
       image-artifact: ${{ steps.docker.outputs.artifact-name }}
       tag: pr-123-${{ steps.deploy-changes.outputs.content-key }}
@@ -396,7 +384,7 @@ Multiple binaries or images: add another **build-go** / **build-docker** / **pus
 | **CI go-checks** | Caller `if:` on **detect-changes** (go paths) → `changed` |
 | **Deploy job gate** | Caller `if:` on **detect-changes** (deploy paths) → `changed` |
 | **Go binary** | **build-go** internal `actions/cache`; caller `if:` decides invocation |
-| **Docker image** | **build-docker** internal `actions/cache`; caller `if:` on **push-container** `exists` |
+| **Docker image** | **build-docker** internal `actions/cache`; caller `if:` on **detect-changes** `changed` |
 
 ---
 
