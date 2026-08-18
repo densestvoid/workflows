@@ -44,7 +44,7 @@ Pin actions at the same ref (e.g. `@main` during v0, `@v1` when released):
 
 ## Typical build pipeline
 
-Use the same globs for **detect-changes** `paths` (skip/tag) and **build-docker** `hash-paths` (cache). **build-go** derives its cache key from `go list -deps` automatically.
+Use **detect-changes** `paths` for skip gates and image tags. **build-go** derives its cache key from `go list -deps`. **build-docker** uses BuildKit GHA layer cache (no caller hash paths).
 
 ```yaml
 steps:
@@ -67,11 +67,6 @@ steps:
     id: docker
     if: steps.deploy-changes.outputs.changed == 'true'
     with:
-      hash-paths: |
-        **/*.go
-        go.mod
-        go.sum
-        Dockerfile
       artifacts: ${{ steps.build-go.outputs.artifact-name }}
       dockerfile: Dockerfile
 

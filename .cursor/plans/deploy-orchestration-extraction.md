@@ -85,7 +85,7 @@ Established by `install-go-tool/` — cacheable actions use `actions/cache` **in
 | Action | Cache key |
 |--------|-----------|
 | **build-go** | `go list -deps` source/embed/cgo files for `main-package` + `go.mod`/`go.sum` |
-| **build-docker** | Caller `hash-paths` globs + `dockerfile` + input artifact file contents |
+| **build-docker** | BuildKit `type=gha` layer cache (scope per image; `.dockerignore` applied by BuildKit) |
 | **install-go-tool** | `tool-package` + `tool-version` (cached at `~/go/bin/<tool>`) |
 
 ---
@@ -164,18 +164,17 @@ Whether to call **build-go** at all (e.g. when sources unchanged) is a **caller 
 
 Mirrors **build-go**:
 
-1. Compute internal cache key from caller `hash-paths` + dockerfile + downloaded artifact files
-2. **`actions/cache`** — restore/save image tar (`docker save`) keyed on cache key + `dockerfile`
-3. On cache miss — `docker build` → `docker save` → save to cache
-4. **Upload artifact** — always, for downstream handoff (cross-job or push-container)
+1. **`docker buildx build`** with `--cache-from` / `--cache-to type=gha` — BuildKit layer cache via GitHub Actions cache API (respects `.dockerignore` natively)
+2. On cache miss or partial hit — BuildKit rebuilds only changed layers
+3. **`docker save`** → upload image artifact for downstream handoff
 
 | Input | Purpose |
 |-------|---------|
 | `context` | Docker build context |
 | `dockerfile` | Dockerfile path |
-| `hash-paths` | Multiline glob patterns for cache key (same style as **detect-changes** `paths`) |
 | `artifacts` | Multiline list of artifact names to download (from **build-go** steps) |
 | `artifact-name` | Optional. Default: **basename of `dockerfile`** (e.g. `Dockerfile` → `image`, `Dockerfile.worker` → `Dockerfile.worker`) |
+| `cache-scope` | Optional. BuildKit GHA cache scope (default: `artifact-name`) |
 
 | Output | Purpose |
 |--------|---------|
@@ -187,7 +186,7 @@ Whether to call **build-docker** is a **caller `if:`** decision. Cache restore i
 
 **Checkout:** Full repo.
 
-**Cache key:** Caller `hash-paths` globs resolved against the checked-out tree via `git ls-files` (pathspec expansion for `**` etc.) + dockerfile content + downloaded artifact file contents.
+**Cache:** BuildKit `type=gha` layer cache — no custom context hashing. BuildKit evaluates the build context (with `.dockerignore`) and caches layers automatically. Registry cache (`type=registry`) is a caller option for advanced pipelines that push cache refs separately.
 
 ---
 
@@ -356,11 +355,6 @@ steps:
     id: docker
     if: steps.deploy-changes.outputs.changed == 'true'
     with:
-      hash-paths: |
-        **/*.go
-        go.mod
-        go.sum
-        Dockerfile
       dockerfile: Dockerfile
       artifacts: ${{ steps.build-go.outputs.artifact-name }}
 
@@ -406,7 +400,7 @@ Multiple binaries or images: add another **build-go** / **build-docker** / **pus
 | **CI go-checks** | Caller `if:` on **detect-changes** (go paths) → `changed` |
 | **Deploy job gate** | Caller `if:` on **detect-changes** (deploy paths) → `changed` |
 | **Go binary** | **build-go** internal `actions/cache`; caller `if:` decides invocation |
-| **Docker image** | **build-docker** internal `actions/cache`; caller `if:` on **detect-changes** `changed` |
+| **Docker image** | **build-docker** BuildKit `type=gha` layer cache; caller `if:` on **detect-changes** `changed` |
 
 ---
 
@@ -550,7 +544,7 @@ jobs:
 | **Deploy Gate** | Superseded by **detect-changes** with deploy paths |
 | **`skip` / `cache-hit` on build actions** | Caller `if:` decides invocation; cache is internal |
 | **`local-tag` handoff** | **build-docker** uploads image artifact; **push-container** loads it |
-| **`hash-paths` on build-go** | `go list -deps` derives Go build inputs automatically; `hash-paths` only on **build-docker** |
+| **`hash-paths` on build-docker** | BuildKit `type=gha` layer cache replaces custom context hashing |
 | **Write Tfvars** / JSON-only variable maps | Action inputs + optional `variables` block; complex types in Terraform HCL |
 | **Static tfvars defaults in v0** | Deferred |
 | **`terraform-dir` on terminate** | Empty module lives in workflows repo; destroy from state only |
