@@ -45,20 +45,42 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        list_template='{{if not .Standard}}{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{range .EmbedFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{range .CgoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{range .CFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{end}}'
+
+        # Fingerprint everything that can change the compiled binary:
+        #   1. go.mod / go.sum  — module versions and dependency checksums
+        #   2. source files     — every non-stdlib file in the dependency tree
+        #
+        # go list -deps walks the import graph from main-package.
+        # -f templates below print one absolute file path per line.
+        #   {{if not .Standard}}  skip standard library (not copied into binary from disk)
+        #   {{range .GoFiles}}    .go sources
+        #   {{range .EmbedFiles}} //go:embed assets
+        #   {{range .CgoFiles}}   cgo Go shims
+        #   {{range .CFiles}}     cgo C sources
+        #   {{$.Dir}}/{{.}}       package directory + filename
+        #
+        # sort -u dedupes paths; tar hashes file contents; sha256sum produces the key.
+
+        MAIN_PACKAGE='${{ inputs.main-package }}'
+        SKIP_STDLIB='{{if not .Standard}}'
+        PATH_LINE='{{$.Dir}}/{{.}}{{"\n"}}'
+
         cache_key=$(
           {
             for module_file in go.mod go.sum; do
               [ -f "$module_file" ] && printf '%s\n' "$module_file"
             done
-            go list -deps -f "$list_template" '${{ inputs.main-package }}'
+            go list -deps -f "${SKIP_STDLIB}{{range .GoFiles}}${PATH_LINE}{{end}}{{end}}" "$MAIN_PACKAGE"
+            go list -deps -f "${SKIP_STDLIB}{{range .EmbedFiles}}${PATH_LINE}{{end}}{{end}}" "$MAIN_PACKAGE"
+            go list -deps -f "${SKIP_STDLIB}{{range .CgoFiles}}${PATH_LINE}{{end}}{{end}}" "$MAIN_PACKAGE"
+            go list -deps -f "${SKIP_STDLIB}{{range .CFiles}}${PATH_LINE}{{end}}{{end}}" "$MAIN_PACKAGE"
           } | sort -u | tar -c --files-from - | sha256sum | cut -d' ' -f1
         )
         echo "cache_key=${cache_key}" >> "$GITHUB_OUTPUT"
 
     - name: Restore binary cache
       id: cache
-      uses: actions/cache@v4
+      uses: actions/cache/restore@v4
       with:
         path: ${{ env.ARTIFACT_NAME }}
         key: build-go-${{ steps.cache-key.outputs.cache_key }}-${{ inputs.goos }}-${{ inputs.goarch }}
@@ -67,6 +89,13 @@ runs:
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       run: CGO_ENABLED=0 GOOS=${{ inputs.goos }} GOARCH=${{ inputs.goarch }} go build -o "${{ env.ARTIFACT_NAME }}" '${{ inputs.main-package }}'
+
+    - name: Save binary cache
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v4
+      with:
+        path: ${{ env.ARTIFACT_NAME }}
+        key: build-go-${{ steps.cache-key.outputs.cache_key }}-${{ inputs.goos }}-${{ inputs.goarch }}
 
     - name: Upload binary artifact
       uses: actions/upload-artifact@v7

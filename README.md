@@ -178,7 +178,7 @@ jobs:
 
 | Action | Mechanism |
 |--------|-----------|
-| **build-go** | `actions/cache` on binary at repo root; key from `go.mod`/`go.sum` + source tree (`go list -deps` + `tar`) |
+| **build-go** | `actions/cache/restore` + `actions/cache/save` on binary at repo root; key from `go.mod`/`go.sum` + dep-tree sources |
 | **build-docker** | BuildKit `--cache-from` / `--cache-to type=gha` (`.dockerignore` applied natively) |
 | **install-go-tool** | `actions/cache` on `~/go/bin/<tool>` per package |
 
@@ -251,7 +251,7 @@ Split build and docker across jobs by downloading artifacts in the caller workfl
 
 | Area | Limitation |
 |------|------------|
-| **build-go** | `CGO_ENABLED=0` hardcoded — cgo packages won't build |
+| **build-go** | `CGO_ENABLED=0`; default `GOOS=linux` / `GOARCH=amd64` (override via inputs) — cgo packages won't build |
 | **build-docker** | `actions/download-artifact` when `artifacts` is set; required because checkout wipes workspace |
 | **Testing** | No integration tests in this repo — validate via krogerrecipeshopper rollout |
 
