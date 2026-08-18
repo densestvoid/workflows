@@ -5,9 +5,6 @@ inputs:
     description: 'Go module root'
     required: false
     default: '.'
-  hash-paths:
-    description: 'Multiline glob patterns for cache key (same style as detect-changes paths)'
-    required: true
   main-package:
     description: 'Package path to build (e.g. ./cmd/server)'
     required: true
@@ -38,31 +35,41 @@ runs:
     - name: Checkout Go sources
       uses: actions/checkout@v7
 
-    - name: Compute cache key
-      id: cache-key
-      shell: bash
-      run: |
-        set -euo pipefail
-        mapfile -t PATTERNS < <(printf '%s\n' "${{ inputs.hash-paths }}" | sed '/^[[:space:]]*$/d')
-        if [ "${#PATTERNS[@]}" -eq 0 ]; then
-          echo "No hash-paths patterns provided" >&2
-          exit 1
-        fi
-        HASH_INPUT=$(mktemp)
-        trap 'rm -f "$HASH_INPUT"' EXIT
-        : > "$HASH_INPUT"
-        while IFS= read -r -d '' file; do
-          printf '%s\0' "$file" >> "$HASH_INPUT"
-          cat "$file" >> "$HASH_INPUT"
-        done < <(git ls-files -z -- "${PATTERNS[@]}")
-        HASH=$(sha256sum "$HASH_INPUT" | awk '{print substr($1,1,16)}')
-        echo "key=${HASH}" >> "$GITHUB_OUTPUT"
-
     - name: Setup Go
       uses: actions/setup-go@v5
       with:
         go-version-file: ${{ inputs.working-directory == '.' && 'go.mod' || format('{0}/go.mod', inputs.working-directory) }}
         cache-dependency-path: ${{ inputs.working-directory == '.' && 'go.sum' || format('{0}/go.sum', inputs.working-directory) }}
+
+    - name: Compute cache key
+      id: cache-key
+      shell: bash
+      working-directory: ${{ inputs.working-directory }}
+      run: |
+        set -euo pipefail
+        MAIN_PACKAGE="${{ steps.meta.outputs.main-package }}"
+        HASH_INPUT=$(mktemp)
+        trap 'rm -f "$HASH_INPUT"' EXIT
+        : > "$HASH_INPUT"
+
+        for module_file in go.mod go.sum; do
+          if [ -f "$module_file" ]; then
+            printf '%s\0' "$module_file" >> "$HASH_INPUT"
+            cat "$module_file" >> "$HASH_INPUT"
+          fi
+        done
+
+        while IFS= read -r file; do
+          [ -z "$file" ] && continue
+          [ -f "$file" ] || continue
+          printf '%s\0' "$file" >> "$HASH_INPUT"
+          cat "$file" >> "$HASH_INPUT"
+        done < <(
+          go list -deps -f '{{if not .Standard}}{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{range .EmbedFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{range .CgoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{range .CFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{end}}' "$MAIN_PACKAGE" | sort -u
+        )
+
+        HASH=$(sha256sum "$HASH_INPUT" | awk '{print substr($1,1,16)}')
+        echo "key=${HASH}" >> "$GITHUB_OUTPUT"
 
     - name: Restore binary cache
       uses: actions/cache@v4

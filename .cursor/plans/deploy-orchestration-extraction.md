@@ -84,7 +84,7 @@ Established by `install-go-tool/` — cacheable actions use `actions/cache` **in
 
 | Action | Cache key |
 |--------|-----------|
-| **build-go** | Caller `hash-paths` globs + `main-package` + `artifact-name` |
+| **build-go** | `go list -deps` source/embed/cgo files for `main-package` + `go.mod`/`go.sum` |
 | **build-docker** | Caller `hash-paths` globs + `dockerfile` + input artifact file contents |
 | **install-go-tool** | `tool-package` + `tool-version` (cached at `~/go/bin/<tool>`) |
 
@@ -141,7 +141,6 @@ Examples:
 | Input | Purpose |
 |-------|---------|
 | `working-directory` | Go module root |
-| `hash-paths` | Multiline glob patterns for cache key (same style as **detect-changes** `paths`) |
 | `main-package` | Package path to build (e.g. `./cmd/server`) |
 | `artifact-name` | Optional. Artifact name and binary filename at **repo root** (e.g. `budget`, `server`). Default: basename of `main-package` |
 
@@ -155,7 +154,7 @@ Whether to call **build-go** at all (e.g. when sources unchanged) is a **caller 
 
 **Checkout:** Full repo.
 
-**Cache key:** Caller `hash-paths` — same glob style as **detect-changes** `paths`. Typically use identical globs for skip (`detect-changes`) and cache (`build-go`).
+**Cache key:** `go list -deps` on `main-package` — hashes `GoFiles`, `EmbedFiles`, `CgoFiles`, `CFiles` across the dependency tree plus `go.mod`/`go.sum`. No caller path list needed.
 
 ---
 
@@ -188,7 +187,7 @@ Whether to call **build-docker** is a **caller `if:`** decision. Cache restore i
 
 **Checkout:** Full repo.
 
-**Cache key:** Caller `hash-paths` (git-tracked files matching globs) + dockerfile content + downloaded artifact file contents.
+**Cache key:** Caller `hash-paths` globs resolved against the checked-out tree via `git ls-files` (pathspec expansion for `**` etc.) + dockerfile content + downloaded artifact file contents.
 
 ---
 
@@ -351,10 +350,6 @@ steps:
     id: build-go
     if: steps.go-changes.outputs.changed == 'true'
     with:
-      hash-paths: |
-        **/*.go
-        go.mod
-        go.sum
       main-package: ./cmd/server
 
   - uses: densestvoid/workflows/.github/actions/build-docker@v1
@@ -480,6 +475,7 @@ densestvoid/workflows/
 │   │   ├── build-docker/
 │   │   ├── push-container/
 │   │   ├── deploy-terraform/
+│   │   ├── terraform-output/
 │   │   ├── terminate-terraform/
 │   │   │   └── pr-destroy/
 │   │   └── notify/
@@ -554,7 +550,7 @@ jobs:
 | **Deploy Gate** | Superseded by **detect-changes** with deploy paths |
 | **`skip` / `cache-hit` on build actions** | Caller `if:` decides invocation; cache is internal |
 | **`local-tag` handoff** | **build-docker** uploads image artifact; **push-container** loads it |
-| **`content-key` output on build-docker** | Only `artifact-name` exposed; cache key is internal |
+| **`hash-paths` on build-go** | `go list -deps` derives Go build inputs automatically; `hash-paths` only on **build-docker** |
 | **Write Tfvars** / JSON-only variable maps | Action inputs + optional `variables` block; complex types in Terraform HCL |
 | **Static tfvars defaults in v0** | Deferred |
 | **`terraform-dir` on terminate** | Empty module lives in workflows repo; destroy from state only |

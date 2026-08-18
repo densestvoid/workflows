@@ -82,7 +82,10 @@ runs:
         while IFS= read -r -d '' file; do
           printf '%s\0' "$file" >> "$HASH_INPUT"
           cat "$file" >> "$HASH_INPUT"
-        done < <(git ls-files -z -- "${PATTERNS[@]}")
+        done < <(
+          # Resolve caller hash-paths globs against the checked-out tree (pathspec expansion).
+          git -C "$GITHUB_WORKSPACE" ls-files -z -- "${PATTERNS[@]}"
+        )
         while IFS= read -r name || [ -n "$name" ]; do
           [ -z "$name" ] && continue
           printf '%s\0' "$name" >> "$HASH_INPUT"

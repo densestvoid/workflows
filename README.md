@@ -38,17 +38,13 @@ Pin actions at the same ref (e.g. `@main` during v0, `@v1` when released):
 ```yaml
 - uses: densestvoid/workflows/.github/actions/build-go@main
   with:
-    hash-paths: |
-      **/*.go
-      go.mod
-      go.sum
     main-package: ./cmd/server
     artifact-name: budget   # optional; binary is written to repo root with this name
 ```
 
 ## Typical build pipeline
 
-Use the same globs for **detect-changes** `paths` (skip/tag) and build action `hash-paths` (cache keys):
+Use the same globs for **detect-changes** `paths` (skip/tag) and **build-docker** `hash-paths` (cache). **build-go** derives its cache key from `go list -deps` automatically.
 
 ```yaml
 steps:
@@ -65,10 +61,6 @@ steps:
     id: build-go
     if: steps.deploy-changes.outputs.changed == 'true'
     with:
-      hash-paths: |
-        **/*.go
-        go.mod
-        go.sum
       main-package: ./cmd/server
 
   - uses: densestvoid/workflows/.github/actions/build-docker@main
