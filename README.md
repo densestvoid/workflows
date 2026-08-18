@@ -180,7 +180,7 @@ jobs:
 
 | Action | Mechanism |
 |--------|-----------|
-| **build-go** | `actions/cache` keyed on `go list -deps` file hash + `go.mod`/`go.sum` |
+| **build-go** | `actions/cache` keyed on `go list -deps` source file contents (via jq) |
 | **build-docker** | BuildKit `--cache-from` / `--cache-to type=gha` (`.dockerignore` applied natively) |
 | **install-go-tool** | `actions/cache` on `~/go/bin/<tool>` per package |
 
