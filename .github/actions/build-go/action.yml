@@ -5,7 +5,7 @@ inputs:
     description: 'Package path to build (e.g. ./cmd/server)'
     required: true
   artifact-name:
-    description: 'Artifact name and binary filename at repo root (default: basename of main-package)'
+    description: 'Artifact name and binary filename at repo root (default: basename of main-package; no path separators)'
     required: false
     default: ''
   goos:
@@ -51,24 +51,18 @@ runs:
         #   2. source files     — every non-stdlib file in the dependency tree
         #
         # go list -deps walks the import graph from main-package.
-        # -f templates below print one absolute file path per line.
+        # -f template below prints one absolute file path per line.
         #   {{if not .Standard}}  skip standard library (not copied into binary from disk)
         #   {{range .GoFiles}}    .go sources
         #   {{range .EmbedFiles}} //go:embed assets
-        #   {{range .CgoFiles}}   cgo Go shims
-        #   {{range .CFiles}}     cgo C sources
         #   {{$.Dir}}/{{.}}       package directory + filename
+        #
+        # CgoFiles/CFiles are omitted: this action builds with CGO_ENABLED=0.
         #
         # sort -u dedupes paths; tar hashes file contents; sha256sum produces the key.
 
         MAIN_PACKAGE='${{ inputs.main-package }}'
-        # One template, one go list walk — each line is a file kind from the dep tree
-        list_template='{{if not .Standard}}'\
-'{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}'\
-'{{range .EmbedFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}'\
-'{{range .CgoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}'\
-'{{range .CFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}'\
-'{{end}}'
+        list_template='{{if not .Standard}}{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{range .EmbedFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{end}}'
 
         cache_key=$(
           {
