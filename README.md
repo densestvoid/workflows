@@ -2,7 +2,7 @@
 
 Composable GitHub Actions toolbox for CI, build, deploy, and notify.
 
-Apps own workflow triggers, job graphs, and composition. This repo provides atomic steps only.
+**Toolbox, not orchestration.** This repo provides atomic, reusable actions. Each app repo owns workflow triggers, job graphs, `needs:` wiring, and which steps to call. Compose by repeating steps — one `build-go` per binary, one `build-docker` per Dockerfile, one `push-container` per image.
 
 ## Workflows
 
@@ -35,7 +35,35 @@ Pair with **detect-changes** in the caller repo to skip when Go sources are unch
 | [setup-go](.github/actions/setup-go) | Checkout + Go toolchain |
 | [install-go-tool](.github/actions/install-go-tool) | Install + cache a Go CLI tool (`~/go/bin/<tool>`) |
 
-Pin every action at the same ref (e.g. `@main` during v0, `@v1` when released).
+## Versioning
+
+Action directory names are unversioned (`build-go`, `deploy-terraform`, …). Version lives in the **git ref**:
+
+```yaml
+uses: densestvoid/workflows/.github/actions/build-go@v1
+uses: densestvoid/workflows/.github/actions/deploy-terraform@v1
+```
+
+Pin every action at the same repo ref (`@main` during v0, `@v1` when released). One tag = one tested snapshot of the whole toolbox. Bump all pins together on release.
+
+| Ref | When |
+|-----|------|
+| `@main` | v0 iteration |
+| `@v1`, `@v2` | Stable releases (major = breaking change to any action) |
+| `@<sha>` | Debug pin |
+
+Escape hatch: per-action tags like `@deploy-terraform/v1.1.0` when you need independent versioning.
+
+## Secrets
+
+Secrets live in **each app repo** (repository secrets/variables, or GitHub Environments). Callers pass `${{ secrets.* }}` as action inputs — the workflows repo does not hold cross-repo deploy credentials.
+
+| Typical app secrets | Used by |
+|---------------------|---------|
+| `DO_TOKEN`, `TERRAFORM_AWS_*` | deploy/terminate terraform |
+| `SLACK_WEBHOOK` | notify |
+| `DOCKERHUB_*` | push-container |
+| `GITHUB_TOKEN` or PAT | push-container (GHCR), notify (PR comments) |
 
 ## Typical PR deploy pipeline
 
@@ -147,6 +175,8 @@ jobs:
     terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 ```
 
+**terminate-terraform** uses a bundled empty destroy module at `${{ github.action_path }}/pr-destroy` — GitHub copies only the action directory onto the runner, so the module must live inside the action and versions with the action pin.
+
 ## Caching
 
 | Action | Mechanism |
@@ -159,13 +189,25 @@ Skip logic is caller-owned: use **detect-changes** `changed` in workflow `if:` c
 
 ## Caller notes
 
+### Checkout
+
+Every action that needs source code checks out the full repo itself. Callers should not pre-checkout for these actions. Chaining multiple actions in one job means multiple checkouts (wasteful but functional).
+
+| Action | Checkout |
+|--------|----------|
+| detect-changes, build-go, build-docker, deploy-terraform, setup-go | Full repo |
+| push-container, notify, terraform-output | None (artifacts / existing workspace) |
+| terminate-terraform | Bundled `pr-destroy` module only |
+
 ### push-container (GHCR)
 
 Requires `packages: write` and a token with `write:packages`. Use a PAT when `GITHUB_TOKEN` lacks package scope.
 
-### Terraform outputs
+### Terraform
 
-**deploy-terraform** does init + apply only. Read outputs in the same job:
+**deploy-terraform** runs init + apply with `-var` flags (no tfvars writes, no `TF_VAR_*`). App Terraform modules must declare `backend "s3"` with bucket `densestvoid-terraform`; the action overrides `key` and `region` at init.
+
+Read outputs in the same job:
 
 ```yaml
 - uses: densestvoid/workflows/.github/actions/terraform-output@main
@@ -182,6 +224,28 @@ Call once per output. Or run `terraform output -raw <name>` directly — `setup-
 ### build-docker artifacts
 
 **build-docker** downloads **build-go** artifacts via `gh run download` in the same workflow run. Split build and docker across jobs only if the caller downloads artifacts between jobs.
+
+## Known limitations (v0)
+
+| Area | Limitation |
+|------|------------|
+| **build-go** | `CGO_ENABLED=0` hardcoded — cgo packages won't build |
+| **deploy/terminate `variables`** | Naive `KEY=value` parsing — values with spaces, quotes, or `=` break |
+| **detect-changes** | `**` globs passed to `git diff`/`git ls-files` may not match all files you expect |
+| **detect-changes `content-key`** | Only hashes git-tracked files matching `paths` |
+| **build-docker** | `gh run download` only works within the same workflow run |
+| **push-container** | Registry credentials interpolated into shell — special characters in secrets can break login |
+| **Constants** | Terraform `1.5.7`, S3 bucket `densestvoid-terraform` hardcoded |
+| **Testing** | No integration tests in this repo — validate via krogerrecipeshopper rollout |
+
+## Rollout
+
+| Phase | Scope |
+|-------|-------|
+| **v0** | Build actions in workflows repo |
+| **v0 test** | Validate composition with krogerrecipeshopper |
+| **v1** | Cut `@v1` tag; create `app-deploy-template` |
+| **v1 migrate** | Update budget (last) |
 
 ## Repository structure
 
