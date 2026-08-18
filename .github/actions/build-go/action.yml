@@ -74,7 +74,7 @@ runs:
             go list -deps -f "${SKIP_STDLIB}{{range .EmbedFiles}}${PATH_LINE}{{end}}{{end}}" "$MAIN_PACKAGE"
             go list -deps -f "${SKIP_STDLIB}{{range .CgoFiles}}${PATH_LINE}{{end}}{{end}}" "$MAIN_PACKAGE"
             go list -deps -f "${SKIP_STDLIB}{{range .CFiles}}${PATH_LINE}{{end}}{{end}}" "$MAIN_PACKAGE"
-          } | sort -u | tar -c --files-from - | sha256sum | cut -d' ' -f1
+          } | sort -u | tar -c --files-from - | sha256sum | awk '{print $1}'
         )
         echo "cache_key=${cache_key}" >> "$GITHUB_OUTPUT"
 
