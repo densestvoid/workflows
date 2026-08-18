@@ -62,18 +62,20 @@ runs:
         # sort -u dedupes paths; tar hashes file contents; sha256sum produces the key.
 
         MAIN_PACKAGE='${{ inputs.main-package }}'
-        SKIP_STDLIB='{{if not .Standard}}'
-        PATH_LINE='{{$.Dir}}/{{.}}{{"\n"}}'
+        # One template, one go list walk — each line is a file kind from the dep tree
+        list_template='{{if not .Standard}}'\
+'{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}'\
+'{{range .EmbedFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}'\
+'{{range .CgoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}'\
+'{{range .CFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}'\
+'{{end}}'
 
         cache_key=$(
           {
             for module_file in go.mod go.sum; do
               [ -f "$module_file" ] && printf '%s\n' "$module_file"
             done
-            go list -deps -f "${SKIP_STDLIB}{{range .GoFiles}}${PATH_LINE}{{end}}{{end}}" "$MAIN_PACKAGE"
-            go list -deps -f "${SKIP_STDLIB}{{range .EmbedFiles}}${PATH_LINE}{{end}}{{end}}" "$MAIN_PACKAGE"
-            go list -deps -f "${SKIP_STDLIB}{{range .CgoFiles}}${PATH_LINE}{{end}}{{end}}" "$MAIN_PACKAGE"
-            go list -deps -f "${SKIP_STDLIB}{{range .CFiles}}${PATH_LINE}{{end}}{{end}}" "$MAIN_PACKAGE"
+            go list -deps -f "$list_template" "$MAIN_PACKAGE"
           } | sort -u | tar -c --files-from - | sha256sum | awk '{print $1}'
         )
         echo "cache_key=${cache_key}" >> "$GITHUB_OUTPUT"
