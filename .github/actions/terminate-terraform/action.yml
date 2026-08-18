@@ -1,5 +1,8 @@
 name: 'Terminate Terraform'
-description: 'Destroy resources from state using bundled pr-destroy module and delete S3 state'
+description: >-
+  Destroy resources from state using bundled pr-destroy module and delete S3 state.
+  Pass Terraform variables via TF_VAR_* env on the invoking workflow step
+  (e.g. TF_VAR_do_token). AWS S3 backend settings are action inputs.
 inputs:
   backend-key:
     description: 'S3 state key to destroy and delete'
@@ -7,22 +10,15 @@ inputs:
   terraform-s3-bucket:
     description: 'S3 state bucket (must match the bucket used at deploy init)'
     required: true
-  do-token:
-    description: 'DigitalOcean API token'
-    required: true
   terraform-aws-access-key-id:
-    description: 'S3 backend access key ID'
+    description: 'S3 backend access key ID (passed to terraform init -backend-config)'
     required: true
   terraform-aws-secret-access-key:
-    description: 'S3 backend secret access key'
+    description: 'S3 backend secret access key (passed to terraform init -backend-config)'
     required: true
   terraform-aws-region:
-    description: 'S3 backend region'
+    description: 'S3 backend region (passed to terraform init -backend-config and aws cli)'
     required: true
-  variables-json:
-    description: 'JSON object of extra Terraform variables if required by destroy'
-    required: false
-    default: '{}'
 outputs:
   destroyed:
     description: 'true on successful destroy'
@@ -41,48 +37,38 @@ runs:
     - name: Terminate
       id: terminate
       shell: bash
-      env:
-        AWS_ACCESS_KEY_ID: ${{ inputs.terraform-aws-access-key-id }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.terraform-aws-secret-access-key }}
-        AWS_REGION: ${{ inputs.terraform-aws-region }}
-        DO_TOKEN: ${{ inputs.do-token }}
-        VARIABLES_JSON: ${{ inputs.variables-json }}
-        STATE_BUCKET: ${{ inputs.terraform-s3-bucket }}
+      working-directory: ${{ github.action_path }}/pr-destroy
       run: |
         set -euo pipefail
-        cd "${{ github.action_path }}/pr-destroy"
 
-        TFVARS="${RUNNER_TEMP}/ci.auto.tfvars.json"
-        if [ -z "$VARIABLES_JSON" ] || [ "$VARIABLES_JSON" = "{}" ]; then
-          echo '{}' > "$TFVARS"
-        else
-          printf '%s' "$VARIABLES_JSON" > "$TFVARS"
-        fi
-        jq empty "$TFVARS"
-        jq --arg token "$DO_TOKEN" '. + {do_token: $token}' "$TFVARS" > "${TFVARS}.tmp"
-        mv "${TFVARS}.tmp" "$TFVARS"
-
-        BACKEND_KEY="${{ inputs.backend-key }}"
+        aws_cli() {
+          AWS_ACCESS_KEY_ID='${{ inputs.terraform-aws-access-key-id }}' \
+          AWS_SECRET_ACCESS_KEY='${{ inputs.terraform-aws-secret-access-key }}' \
+          AWS_DEFAULT_REGION='${{ inputs.terraform-aws-region }}' \
+          aws "$@"
+        }
 
         echo "destroyed=false" >> "$GITHUB_OUTPUT"
         echo "state-deleted=false" >> "$GITHUB_OUTPUT"
 
         if ! terraform init \
-          -backend-config="bucket=${STATE_BUCKET}" \
-          -backend-config="key=${BACKEND_KEY}" \
-          -backend-config="region=${{ inputs.terraform-aws-region }}"; then
+          -backend-config="bucket=${{ inputs.terraform-s3-bucket }}" \
+          -backend-config="key=${{ inputs.backend-key }}" \
+          -backend-config="region=${{ inputs.terraform-aws-region }}" \
+          -backend-config="access_key=${{ inputs.terraform-aws-access-key-id }}" \
+          -backend-config="secret_key=${{ inputs.terraform-aws-secret-access-key }}"; then
           echo "Terraform init failed" >&2
           exit 1
         fi
 
-        RESOURCE_COUNT=$(terraform state list 2>/dev/null | wc -l | tr -d ' ')
+        resource_count=$(terraform state list 2>/dev/null | wc -l | tr -d ' ')
 
-        if [ "$RESOURCE_COUNT" -eq 0 ]; then
+        if [ "$resource_count" -eq 0 ]; then
           echo "No resources in state — already terminated"
           echo "destroyed=true" >> "$GITHUB_OUTPUT"
-          if aws s3 rm "s3://${STATE_BUCKET}/${BACKEND_KEY}"; then
+          if aws_cli s3 rm "s3://${{ inputs.terraform-s3-bucket }}/${{ inputs.backend-key }}"; then
             echo "state-deleted=true" >> "$GITHUB_OUTPUT"
-          elif ! aws s3 ls "s3://${STATE_BUCKET}/${BACKEND_KEY}" >/dev/null 2>&1; then
+          elif ! aws_cli s3 ls "s3://${{ inputs.terraform-s3-bucket }}/${{ inputs.backend-key }}" >/dev/null 2>&1; then
             echo "state-deleted=true" >> "$GITHUB_OUTPUT"
           else
             echo "State empty but S3 state file could not be removed" >&2
@@ -91,14 +77,14 @@ runs:
           exit 0
         fi
 
-        if ! terraform apply -auto-approve -var-file="$TFVARS"; then
+        if ! terraform apply -auto-approve; then
           echo "Terraform apply failed during state teardown" >&2
           exit 1
         fi
 
         echo "destroyed=true" >> "$GITHUB_OUTPUT"
 
-        if aws s3 rm "s3://${STATE_BUCKET}/${BACKEND_KEY}"; then
+        if aws_cli s3 rm "s3://${{ inputs.terraform-s3-bucket }}/${{ inputs.backend-key }}"; then
           echo "state-deleted=true" >> "$GITHUB_OUTPUT"
         else
           echo "Destroy succeeded but S3 state file could not be removed" >&2

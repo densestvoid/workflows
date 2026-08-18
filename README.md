@@ -28,7 +28,7 @@ Pair with **detect-changes** in the caller repo to skip when Go sources are unch
 | [push-container](.github/actions/push-container) | Load image artifact; push to GHCR and/or Docker Hub |
 | [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`TF_VAR_*` env on the invoking step) |
 | [terraform-output](.github/actions/terraform-output) | Read one Terraform output (same job, after deploy) |
-| [terminate-terraform](.github/actions/terminate-terraform) | Empty-module destroy + S3 state delete |
+| [terminate-terraform](.github/actions/terminate-terraform) | Empty-module destroy + S3 state delete (`TF_VAR_*` env on the invoking step) |
 | [notify](.github/actions/notify) | Slack + PR comment delivery |
 | [setup-go](.github/actions/setup-go) | Checkout + Go toolchain |
 | [install-go-tool](.github/actions/install-go-tool) | Install + cache a Go CLI tool (`~/go/bin/<tool>`) |
@@ -110,14 +110,16 @@ jobs:
 
       - uses: densestvoid/workflows/.github/actions/deploy-terraform@main
         if: steps.deploy-changes.outputs.changed == 'true'
+        env:
+          TF_VAR_deployment_id: pr-${{ github.event.pull_request.number }}
+          TF_VAR_docker_image_tag: ${{ steps.push.outputs.image-ref }}
+          TF_VAR_do_token: ${{ secrets.DO_TOKEN }}
         with:
           terraform-dir: terraform/pr
           backend-key: pr/pr-${{ github.event.pull_request.number }}.tfstate
-          do-token: ${{ secrets.DO_TOKEN }}
           terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
           terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
           terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
-          variables-json: '{"deployment_id":"pr-${{ github.event.pull_request.number }}","docker_image_tag":"${{ steps.push.outputs.image-ref }}"}'
 
       - uses: densestvoid/workflows/.github/actions/terraform-output@main
         id: service-url
@@ -163,16 +165,17 @@ jobs:
 
 ```yaml
 - uses: densestvoid/workflows/.github/actions/terminate-terraform@main
+  env:
+    TF_VAR_do_token: ${{ secrets.DO_TOKEN }}
   with:
     backend-key: pr/pr-${{ github.event.pull_request.number }}.tfstate
     terraform-s3-bucket: densestvoid-terraform
-    do-token: ${{ secrets.DO_TOKEN }}
     terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
     terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
     terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 ```
 
-**terminate-terraform** uses a bundled empty destroy module at `${{ github.action_path }}/pr-destroy` — GitHub copies only the action directory onto the runner, so the module must live inside the action and versions with the action pin. Pass `terraform-s3-bucket` to match the bucket declared in your app Terraform backend (same value deploy init uses).
+**terminate-terraform** uses a bundled empty destroy module at `${{ github.action_path }}/pr-destroy`. Pass `terraform-s3-bucket` to match the bucket declared in your app Terraform backend. Terraform variables (e.g. `TF_VAR_do_token`) are set as env on the invoking workflow step, same as **deploy-terraform**.
 
 ## Caching
 
@@ -221,9 +224,9 @@ go-checks:
 
 ### Terraform
 
-**deploy-terraform** writes `variables-json` to a temp file (`TFVARS_FILE` in `${RUNNER_TEMP}/tfvars.json`) and applies with `-var-file`; `do-token` is passed as `-var=do_token=...`. S3 backend credentials use `terraform init -backend-config` (`access_key`, `secret_key`, `key`, `region`). App Terraform modules must declare `backend "s3"` with bucket and partial config; the action overrides `key` and `region` at init.
+**deploy-terraform** runs `terraform apply -auto-approve`; Terraform variables come from `TF_VAR_*` env vars set on the invoking workflow step (e.g. `TF_VAR_do_token`, `TF_VAR_deployment_id`). Those env vars propagate into the action automatically — no `with:` inputs for module variables. S3 backend credentials are action inputs passed via `terraform init -backend-config` (`access_key`, `secret_key`, `key`, `region`). App Terraform modules must declare `backend "s3"` with bucket and partial config; the action overrides `key` and `region` at init.
 
-**terminate-terraform** uses a partial S3 backend in `pr-destroy` — pass `terraform-s3-bucket`, `backend-key`, and `terraform-aws-region` at init (same bucket your deploy module declares).
+**terminate-terraform** uses a partial S3 backend in `pr-destroy` — pass `terraform-s3-bucket`, `backend-key`, and AWS credentials as action inputs; module variables via `TF_VAR_*` env on the invoking step.
 
 Terraform CLI version is resolved by `hashicorp/setup-terraform` (latest release, not pinned).
 
