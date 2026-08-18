@@ -42,19 +42,23 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        name='${{ inputs.artifact-name }}'; [ -z "$name" ] && name=$(basename "$(cd "$(dirname '${{ inputs.dockerfile }}')" && pwd)"); printf 'ARTIFACT_NAME=%s\n' "$name" >> "$GITHUB_ENV"
+        ARTIFACT_NAME='${{ inputs.artifact-name }}'
+        if [ -z "$ARTIFACT_NAME" ]; then
+          ARTIFACT_NAME=$(basename "$(cd "$(dirname '${{ inputs.dockerfile }}')" && pwd)")
+        fi
+        printf 'ARTIFACT_NAME=%s\n' "$ARTIFACT_NAME" >> "$GITHUB_ENV"
 
         docker buildx build \
           --file "${{ inputs.dockerfile }}" \
-          --tag "build-docker-local:${name}" \
-          --cache-from "type=gha,scope=${name}" \
-          --cache-to "type=gha,scope=${name},mode=max" \
+          --tag "build-docker-local:${ARTIFACT_NAME}" \
+          --cache-from "type=gha,scope=${ARTIFACT_NAME}" \
+          --cache-to "type=gha,scope=${ARTIFACT_NAME},mode=max" \
           --load \
           "${{ inputs.context-path }}"
 
-        docker save "build-docker-local:${name}" \
-          -o "${{ runner.temp }}/build-docker-${name}.tar"
-        cp "${{ runner.temp }}/build-docker-${name}.tar" "${name}.tar"
+        docker save "build-docker-local:${ARTIFACT_NAME}" \
+          -o "${{ runner.temp }}/build-docker-${ARTIFACT_NAME}.tar"
+        cp "${{ runner.temp }}/build-docker-${ARTIFACT_NAME}.tar" "${ARTIFACT_NAME}.tar"
 
     - name: Upload image artifact
       uses: actions/upload-artifact@v7
