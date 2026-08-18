@@ -2,25 +2,20 @@
 package main
 
 import (
-	"archive/tar"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"flag"
 	"fmt"
+	"go/build"
+	"hash"
 	"io"
 	"os"
-	"os/exec"
 	"path/filepath"
 	"sort"
-)
+	"strings"
 
-type goPackage struct {
-	Dir        string   `json:"Dir"`
-	Standard   bool     `json:"Standard"`
-	GoFiles    []string `json:"GoFiles"`
-	EmbedFiles []string `json:"EmbedFiles"`
-}
+	"golang.org/x/tools/go/packages"
+)
 
 func main() {
 	mainPackage := flag.String("main-package", "", "main package path (e.g. ./cmd/server)")
@@ -63,38 +58,28 @@ func sourcePaths(mainPackage string) ([]string, error) {
 		}
 	}
 
-	cmd := exec.Command("go", "list", "-deps", "-json", mainPackage)
-	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")
-	cmd.Stderr = os.Stderr
+	cfg := &packages.Config{
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedEmbedFiles | packages.NeedDeps,
+		Env:  append(os.Environ(), "CGO_ENABLED=0"),
+	}
 
-	stdout, err := cmd.StdoutPipe()
+	pkgs, err := packages.Load(cfg, mainPackage)
 	if err != nil {
-		return nil, fmt.Errorf("go list stdout: %w", err)
+		return nil, fmt.Errorf("load packages: %w", err)
 	}
 
-	if err := cmd.Start(); err != nil {
-		return nil, fmt.Errorf("go list: %w", err)
-	}
-
-	decoder := json.NewDecoder(stdout)
-	for decoder.More() {
-		var pkg goPackage
-		if err := decoder.Decode(&pkg); err != nil {
-			_ = cmd.Wait()
-			return nil, fmt.Errorf("decode go list json: %w", err)
+	for _, pkg := range pkgs {
+		for _, loadErr := range pkg.Errors {
+			return nil, fmt.Errorf("%s: %s", pkg.PkgPath, loadErr.Msg)
 		}
 
-		if pkg.Standard || pkg.Dir == "" {
+		if isStandardLibrary(pkg) {
 			continue
 		}
 
-		for _, name := range append(append([]string{}, pkg.GoFiles...), pkg.EmbedFiles...) {
-			pathSet[filepath.Join(pkg.Dir, name)] = struct{}{}
+		for _, path := range append(pkg.GoFiles, pkg.EmbedFiles...) {
+			pathSet[path] = struct{}{}
 		}
-	}
-
-	if err := cmd.Wait(); err != nil {
-		return nil, fmt.Errorf("go list: %w", err)
 	}
 
 	paths := make([]string, 0, len(pathSet))
@@ -106,44 +91,54 @@ func sourcePaths(mainPackage string) ([]string, error) {
 	return paths, nil
 }
 
-func hashPaths(paths []string) ([]byte, error) {
-	hasher := sha256.New()
-	tarWriter := tar.NewWriter(hasher)
-
-	for _, path := range paths {
-		info, err := os.Stat(path)
-		if err != nil {
-			return nil, fmt.Errorf("stat %s: %w", path, err)
-		}
-		if !info.Mode().IsRegular() {
-			continue
-		}
-
-		header, err := tar.FileInfoHeader(info, "")
-		if err != nil {
-			return nil, fmt.Errorf("tar header %s: %w", path, err)
-		}
-		header.Name = path
-
-		if err := tarWriter.WriteHeader(header); err != nil {
-			return nil, fmt.Errorf("tar write header %s: %w", path, err)
-		}
-
-		file, err := os.Open(path)
-		if err != nil {
-			return nil, fmt.Errorf("open %s: %w", path, err)
-		}
-
-		if _, err := io.Copy(tarWriter, file); err != nil {
-			_ = file.Close()
-			return nil, fmt.Errorf("tar write body %s: %w", path, err)
-		}
-		_ = file.Close()
+func isStandardLibrary(pkg *packages.Package) bool {
+	if pkg.Module != nil {
+		return false
 	}
 
-	if err := tarWriter.Close(); err != nil {
-		return nil, fmt.Errorf("tar close: %w", err)
+	if len(pkg.GoFiles) == 0 {
+		return pkg.PkgPath == "unsafe" || pkg.PkgPath == "C"
+	}
+
+	goroot := filepath.Clean(build.Default.GOROOT) + string(filepath.Separator)
+	for _, file := range pkg.GoFiles {
+		if !strings.HasPrefix(filepath.Clean(file), goroot) {
+			return false
+		}
+	}
+
+	return true
+}
+
+func hashPaths(paths []string) ([]byte, error) {
+	hasher := sha256.New()
+
+	for _, path := range paths {
+		if err := hashFile(hasher, path); err != nil {
+			return nil, err
+		}
 	}
 
 	return hasher.Sum(nil), nil
+}
+
+func hashFile(hasher hash.Hash, path string) error {
+	if _, err := io.WriteString(hasher, path); err != nil {
+		return fmt.Errorf("hash path %s: %w", path, err)
+	}
+	if _, err := hasher.Write([]byte{0}); err != nil {
+		return fmt.Errorf("hash path %s: %w", path, err)
+	}
+
+	file, err := os.Open(path)
+	if err != nil {
+		return fmt.Errorf("open %s: %w", path, err)
+	}
+	defer file.Close()
+
+	if _, err := io.Copy(hasher, file); err != nil {
+		return fmt.Errorf("hash contents %s: %w", path, err)
+	}
+
+	return nil
 }
