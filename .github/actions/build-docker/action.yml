@@ -9,17 +9,17 @@ inputs:
     description: 'Dockerfile path'
     required: false
     default: 'Dockerfile'
-  artifacts:
-    description: 'Multiline list of workflow artifact names to download into context-path before build'
+  artifact:
+    description: 'Optional workflow artifact name to download into context-path before build'
     required: false
     default: ''
   artifact-name:
-    description: 'Output artifact name (default: basename of dockerfile, or image when dockerfile is Dockerfile)'
+    description: 'Optional image artifact name override (default derived from dockerfile)'
     required: false
     default: ''
 outputs:
   artifact-name:
-    description: 'Uploaded image artifact name'
+    description: 'Resolved image artifact name for push-container'
     value: ${{ steps.build.outputs.artifact-name }}
 runs:
   using: 'composite'
@@ -27,15 +27,12 @@ runs:
     - name: Checkout Docker context
       uses: actions/checkout@v7
 
-    - name: Download input artifacts
-      if: ${{ inputs.artifacts != '' }}
-      shell: bash
-      run: |
-        set -euo pipefail
-        while IFS= read -r name; do
-          [ -z "$name" ] && continue
-          gh run download "$GITHUB_RUN_ID" --name "$name" --dir "${{ inputs.context-path }}"
-        done <<< '${{ inputs.artifacts }}'
+    - name: Download input artifact
+      if: ${{ inputs.artifact != '' }}
+      uses: actions/download-artifact@v8
+      with:
+        name: ${{ inputs.artifact }}
+        path: ${{ inputs.context-path }}
 
     - name: Set up Docker Buildx
       uses: docker/setup-buildx-action@v4
@@ -43,32 +40,31 @@ runs:
     - name: Build and save image
       id: build
       shell: bash
+      env:
+        ARTIFACT_NAME_INPUT: ${{ inputs.artifact-name }}
       run: |
         set -euo pipefail
 
-        DOCKERFILE="${{ inputs.dockerfile }}"
-        ARTIFACT_NAME="${{ inputs.artifact-name }}"
+        ARTIFACT_NAME="$ARTIFACT_NAME_INPUT"
         if [ -z "$ARTIFACT_NAME" ]; then
-          ARTIFACT_NAME=$(basename "$DOCKERFILE")
+          ARTIFACT_NAME=$(basename "${{ inputs.dockerfile }}")
           if [ "$ARTIFACT_NAME" = "Dockerfile" ]; then
             ARTIFACT_NAME="image"
           fi
         fi
         echo "artifact-name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"
 
-        LOCAL_TAG="build-docker-local:${ARTIFACT_NAME}"
-        IMAGE_TAR="${{ runner.temp }}/build-docker-${ARTIFACT_NAME}.tar"
-
         docker buildx build \
-          --file "$DOCKERFILE" \
-          --tag "$LOCAL_TAG" \
+          --file "${{ inputs.dockerfile }}" \
+          --tag "build-docker-local:${ARTIFACT_NAME}" \
           --cache-from "type=gha,scope=${ARTIFACT_NAME}" \
           --cache-to "type=gha,scope=${ARTIFACT_NAME},mode=max" \
           --load \
           "${{ inputs.context-path }}"
 
-        docker save "$LOCAL_TAG" -o "$IMAGE_TAR"
-        cp "$IMAGE_TAR" "${ARTIFACT_NAME}.tar"
+        docker save "build-docker-local:${ARTIFACT_NAME}" \
+          -o "${{ runner.temp }}/build-docker-${ARTIFACT_NAME}.tar"
+        cp "${{ runner.temp }}/build-docker-${ARTIFACT_NAME}.tar" "${ARTIFACT_NAME}.tar"
 
     - name: Upload image artifact
       uses: actions/upload-artifact@v7
