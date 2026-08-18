@@ -258,8 +258,8 @@ Destroy from existing state using the **workflows-repo** `pr-destroy` empty modu
 
 | Output | Purpose |
 |--------|---------|
-| `destroyed` | `true` on success |
-| `state-deleted` | `true` when S3 state file removed |
+| `destroyed` | `true` when teardown completed (including empty state); action **fails** on init/apply/S3 errors |
+| `state-deleted` | `true` when S3 state file removed (or already absent after empty state) |
 
 **Checkout:** Bundled `pr-destroy` module at `${{ github.action_path }}/pr-destroy` — no separate repo checkout.
 
