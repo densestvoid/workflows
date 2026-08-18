@@ -39,7 +39,7 @@ Pin actions at the same ref (e.g. `@main` during v0, `@v1` when released):
   with:
     content-key: ${{ steps.go-changes.outputs.content-key }}
     main-package: ./cmd/server
-    artifact-name: budget   # or bin/server — path within artifact
+    artifact-name: budget   # optional; binary is written to repo root with this name
 ```
 
 ## Typical build pipeline

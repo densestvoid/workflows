@@ -1,5 +1,5 @@
 name: 'Deploy Terraform'
-description: 'Terraform init and apply with variables passed as action inputs'
+description: 'Terraform init and apply with variables passed as -var flags'
 inputs:
   terraform-dir:
     description: 'Path to Terraform root module in the caller repo'
@@ -44,33 +44,29 @@ runs:
       id: apply
       shell: bash
       env:
-        TF_DIR: ${{ inputs.terraform-dir }}
-        BACKEND_KEY: ${{ inputs.backend-key }}
-        DO_TOKEN: ${{ inputs.do-token }}
         AWS_ACCESS_KEY_ID: ${{ inputs.terraform-aws-access-key-id }}
         AWS_SECRET_ACCESS_KEY: ${{ inputs.terraform-aws-secret-access-key }}
         AWS_REGION: ${{ inputs.terraform-aws-region }}
-        VARIABLES: ${{ inputs.variables }}
       run: |
         set -euo pipefail
-        cd "$TF_DIR"
+        cd "${{ inputs.terraform-dir }}"
 
-        rm -f ci.auto.tfvars
-        if [ -n "$DO_TOKEN" ]; then
-          printf 'do_token = "%s"\n' "$(printf '%s' "$DO_TOKEN" | sed 's/"/\\"/g')" >> ci.auto.tfvars
+        VAR_ARGS=()
+        if [ -n "${{ inputs.do-token }}" ]; then
+          VAR_ARGS+=(-var "do_token=${{ inputs.do-token }}")
         fi
         while IFS= read -r line || [ -n "$line" ]; do
           [ -z "$line" ] && continue
           key="${line%%=*}"
           val="${line#*=}"
-          printf '%s = "%s"\n' "$key" "$(printf '%s' "$val" | sed 's/"/\\"/g')" >> ci.auto.tfvars
-        done <<< "$VARIABLES"
+          VAR_ARGS+=(-var "${key}=${val}")
+        done <<< '${{ inputs.variables }}'
 
         terraform init \
-          -backend-config="key=${BACKEND_KEY}" \
-          -backend-config="region=${AWS_REGION}"
+          -backend-config="key=${{ inputs.backend-key }}" \
+          -backend-config="region=${{ inputs.terraform-aws-region }}"
 
-        terraform apply -auto-approve
+        terraform apply -auto-approve "${VAR_ARGS[@]}"
 
         OUTPUTS=$(terraform output -json)
         {

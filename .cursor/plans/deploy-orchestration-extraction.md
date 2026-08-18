@@ -143,16 +143,15 @@ Examples:
 | `working-directory` | Go module root |
 | `content-key` | From **detect-changes** (or caller) |
 | `main-package` | Package path to build (e.g. `./cmd/server`) |
-| `artifact-name` | Optional. Output **path** within artifact (e.g. `budget`, `bin/server`). Default: basename of `main-package` |
+| `artifact-name` | Optional. Artifact name and binary filename at **repo root** (e.g. `budget`, `server`). Default: basename of `main-package` |
 
 | Output | Purpose |
 |--------|---------|
-| `artifact-name` | Upload name for downstream download (`/` → `-`) |
-| `artifact-path` | Path of the binary inside the artifact |
+| `artifact-name` | Upload name for downstream download |
 
 Whether to call **build-go** at all (e.g. when sources unchanged) is a **caller `if:`** decision — not an action input.
 
-**Artifact:** Preserves output path layout so Dockerfile `COPY` paths need no remapping.
+**Artifact:** Single binary file at repo root — straightforward upload and `gh run download` into Docker context.
 
 **Checkout:** Sparse — Go sources + `go.mod`/`go.sum` only.
 
@@ -217,7 +216,7 @@ Whether to call **push-container** (or call with `check-only` first) is a **call
 
 ### Deploy Terraform
 
-Variables as **action inputs** (`with:`), not caller-defined `env: TF_VAR_*`. The action maps inputs → Terraform variables internally.
+Variables as **action inputs** (`with:`), passed to Terraform as **`-var` flags** — no `ci.auto.tfvars` writes, no `TF_VAR_*` env.
 
 Infra secrets (`do-token`, `terraform-aws-s3-*`) are **action inputs** — caller passes from that repo’s secrets.
 
@@ -240,13 +239,11 @@ Infra secrets (`do-token`, `terraform-aws-s3-*`) are **action inputs** — calle
 
 **Checkout:** Sparse — `terraform-dir` only.
 
-#### Inputs vs `TF_VAR_*` env
+#### Variable wiring
 
-| Approach | Pros | Cons |
-|----------|------|------|
-| **Action inputs** (chosen) | Clean caller `with:` block; action owns TF wiring; no step-level `env:` | Action must map names → TF variables |
-| `env: TF_VAR_*` on step | Native Terraform discovery | Verbose; leaks TF naming into every caller |
-| JSON map only | Compact | Awkward for single values; harder to read in YAML |
+Action inputs → `terraform apply -var key=value` flags. No tfvars file writes. S3 backend credentials remain as `AWS_*` env (backend config, not TF variables).
+
+**Not in this action:** skip-on-same-image / image-exists checks — caller composes **push-container** `check-only` + workflow `if:` before invoking deploy.
 
 ---
 
