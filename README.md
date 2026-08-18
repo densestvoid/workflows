@@ -274,6 +274,7 @@ Split build and docker across jobs by downloading artifacts in the caller workfl
 │   ├── install-go-tool/
 │   ├── detect-changes/
 │   ├── build-go/
+│   │   └── cachekey/            # bundled Go helper for dep-tree fingerprint
 │   ├── build-docker/
 │   ├── push-container/
 │   ├── deploy-terraform/

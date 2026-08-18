@@ -45,33 +45,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-
-        # Fingerprint everything that can change the compiled binary:
-        #   1. go.mod / go.sum  — module versions and dependency checksums
-        #   2. source files     — every non-stdlib file in the dependency tree
-        #
-        # go list -deps walks the import graph from main-package.
-        # -f template below prints one absolute file path per line.
-        #   {{if not .Standard}}  skip standard library (not copied into binary from disk)
-        #   {{range .GoFiles}}    .go sources
-        #   {{range .EmbedFiles}} //go:embed assets
-        #   {{$.Dir}}/{{.}}       package directory + filename
-        #
-        # CgoFiles/CFiles are omitted: this action builds with CGO_ENABLED=0.
-        #
-        # sort -u dedupes paths; tar hashes file contents; sha256sum produces the key.
-
-        MAIN_PACKAGE='${{ inputs.main-package }}'
-        list_template='{{if not .Standard}}{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{range .EmbedFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{end}}'
-
-        cache_key=$(
-          {
-            for module_file in go.mod go.sum; do
-              [ -f "$module_file" ] && printf '%s\n' "$module_file"
-            done
-            go list -deps -f "$list_template" "$MAIN_PACKAGE"
-          } | sort -u | tar -c --files-from - | sha256sum | awk '{print $1}'
-        )
+        cache_key=$(go run "${{ github.action_path }}/cachekey" --main-package '${{ inputs.main-package }}')
         echo "cache_key=${cache_key}" >> "$GITHUB_OUTPUT"
 
     - name: Restore binary cache
