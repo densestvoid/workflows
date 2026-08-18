@@ -43,15 +43,20 @@ runs:
       run: |
         set -euo pipefail
         cache_key=$(
-          for file in $(
-            go list -deps -json '${{ inputs.main-package }}' | jq -r '
-              select(.Standard != true) | .Dir as $d |
-              ((.GoFiles // []) + (.EmbedFiles // []) + (.CgoFiles // []) + (.CFiles // [])[])[] |
-              "\($d)/\(.)"
-            ' | sort -u
-          ); do
-            cat "$file"
-          done | sha256sum | awk '{print $1}'
+          {
+            for module_file in go.mod go.sum; do
+              [ -f "$module_file" ] && cat "$module_file"
+            done
+            for file in $(
+              go list -deps -json '${{ inputs.main-package }}' | jq -r '
+                select(.Standard != true) | .Dir as $d |
+                ((.GoFiles // []) + (.EmbedFiles // []) + (.CgoFiles // []) + (.CFiles // [])[])[] |
+                "\($d)/\(.)"
+              ' | sort -u
+            ); do
+              cat "$file"
+            done
+          } | sha256sum | awk '{print $1}'
         )
         echo "cache_key=${cache_key}" >> "$GITHUB_OUTPUT"
 
