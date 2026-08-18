@@ -51,11 +51,12 @@ Composite actions for all v0 steps.
 
 | Name | Directory | Purpose |
 |------|-----------|---------|
-| **Detect Changes** | `detect-changes/` | Path-pattern diff + content hash for **any** caller-supplied paths (CI skip, deploy gating, cache keys) |
+| **Detect Changes** | `detect-changes/` | Path-pattern diff + `content-key` for skip gates and image tags |
 | **Build Go** | `build-go/` | Cached Go binary build — **one binary per invocation**; **no Docker awareness** |
 | **Build Docker** | `build-docker/` | `docker buildx` — **one image per invocation**; uploads image as **artifact** |
 | **Push Container** | `push-container/` | Push image artifact to all configured registries in one step |
 | **Deploy Terraform** | `deploy-terraform/` | Terraform init + apply; variables as **action inputs** |
+| **Terraform Output** | `terraform-output/` | Read one Terraform output (`terraform output -raw`) after deploy in the same job |
 | **Terminate Terraform** | `terminate-terraform/` | Destroy via workflows-repo `pr-destroy` empty module; **delete S3 state file on success** |
 | **Notify** | `notify/` | Slack + PR comment delivery; **text passed as input vars** |
 
@@ -64,7 +65,7 @@ Composite actions for all v0 steps.
 | Current | Rename to | Purpose |
 |---------|-----------|---------|
 | `setup/` | `setup-go/` | Checkout + Go toolchain setup |
-| `install-tool/` | `install-go-tool/` | Install + **cache** a Go CLI tool (`actions/cache` on `~/go/bin/…`) |
+| `install-tool/` | `install-go-tool/` | Install + **cache** a Go CLI tool (`actions/cache` on `~/go/bin/<tool>`) |
 
 **Go Checks** (`go-checks.yml`) — update to use renamed actions. App repos call **detect-changes** separately (e.g. Go paths for CI skip).
 
@@ -76,7 +77,7 @@ Future steps (same composable pattern): **Release CLI**, **Deploy Static**, etc.
 
 ## Caching pattern
 
-Established by `install-go-tool/` — cacheable actions use `actions/cache` **internally**. Callers do not receive cache status; they decide whether to invoke an action at all via workflow `if:` conditions.
+Established by `install-go-tool/` and **build-go** — cacheable actions use caching **internally** (`actions/cache` or BuildKit `type=gha`). Callers do not receive cache status; they decide whether to invoke an action via workflow `if:` conditions.
 
 1. **Key** — action-specific (see below)
 2. **Restore** — `actions/cache` with exact key + `restore-keys` prefix fallback
@@ -94,7 +95,7 @@ Established by `install-go-tool/` — cacheable actions use `actions/cache` **in
 
 ### Detect Changes (`detect-changes`)
 
-Generalized change detection for **any** path set — not language-specific. Caller supplies the globs; same action handles CI skip, deploy gating, and source cache keys.
+Generalized change detection for **any** path set — not language-specific. Caller supplies the globs for CI skip, deploy gating, and image tag suffixes (`content-key`).
 
 | Input | Purpose |
 |-------|---------|
@@ -210,6 +211,8 @@ Load image artifact and push to **all configured** registries. Skip unset regist
 
 Whether to call **push-container** is a **caller `if:`** decision (typically gated on **detect-changes** `changed`).
 
+**Caller permissions (GHCR):** `packages: write` on the calling workflow; pass `GITHUB_TOKEN` or a PAT with `write:packages`.
+
 **Checkout:** None.
 
 **Multi-image:** Each **build-docker** → **push-container** pair has its own artifact and tag.
@@ -233,8 +236,6 @@ Infra secrets (`do-token`, `terraform-aws-s3-*`) are **action inputs** — calle
 | `variables` | Multi-line `KEY=value` or JSON map of **non-secret** Terraform variables (app module schema) |
 
 **Outputs:** None — read in the same job via **terraform-output** or `terraform output`.
-
-**Caller permissions (GHCR):** `packages: write` on the calling workflow; pass `GITHUB_TOKEN` or a PAT with `write:packages`.
 
 **Domain / complex types:** CI passes scalars only. Structured values (e.g. `{ hostname, zone }`) are built in Terraform `locals` inside the app module — not in CI.
 
@@ -320,7 +321,7 @@ build-go (worker) ─┼→ build-docker (api) → push-container → Deploy Ter
                    └→ build-docker (worker) → push-container
 ```
 
-**Skip logic:** Callers use **detect-changes** `changed` / `content-key` in workflow `if:` conditions — build actions handle caching internally.
+**Skip logic:** Callers use **detect-changes** `changed` in workflow `if:` conditions. Use `content-key` for image tag suffixes. Build actions handle caching internally.
 
 **Jobs vs steps:** Whether build and deploy run in the same job (shared workspace) or separate jobs (artifact upload/download between jobs) is **left to app repos**.
 
@@ -387,6 +388,7 @@ Multiple binaries or images: add another **build-go** / **build-docker** / **pus
 | build-docker | Full repo; input artifacts downloaded separately |
 | push-container | None (downloads image artifact only) |
 | deploy-terraform | Full repo |
+| terraform-output | None (reads existing workspace state) |
 | terminate-terraform | Bundled `pr-destroy` module only (`github.action_path`) |
 | notify | None |
 | setup-go | Full repo |
@@ -399,7 +401,7 @@ Multiple binaries or images: add another **build-go** / **build-docker** / **pus
 |-------|-----------|
 | **CI go-checks** | Caller `if:` on **detect-changes** (go paths) → `changed` |
 | **Deploy job gate** | Caller `if:` on **detect-changes** (deploy paths) → `changed` |
-| **Go binary** | **build-go** internal `actions/cache`; caller `if:` decides invocation |
+| **Go binary** | **build-go** `actions/cache` + `go list -deps` hash; caller `if:` decides invocation |
 | **Docker image** | **build-docker** BuildKit `type=gha` layer cache; caller `if:` on **detect-changes** `changed` |
 
 ---
@@ -507,6 +509,8 @@ jobs:
   deploy:
     needs: build
     runs-on: ubuntu-latest
+    outputs:
+      service-url: ${{ steps.service-url.outputs.value }}
     steps:
       - uses: densestvoid/workflows/.github/actions/deploy-terraform@v1
         with:
@@ -519,7 +523,12 @@ jobs:
           variables: |
             deployment_id=pr-${{ github.event.pull_request.number }}
             docker_image_tag=${{ needs.build.outputs.image-ref }}
-            domain_name=${{ vars.PRODUCTION_DOMAIN }}
+
+      - uses: densestvoid/workflows/.github/actions/terraform-output@v1
+        id: service-url
+        with:
+          terraform-dir: terraform/pr
+          name: service_url
 
   notify:
     needs: [gate, build, deploy]
@@ -529,9 +538,9 @@ jobs:
       - uses: densestvoid/workflows/.github/actions/notify@v1
         with:
           slack-webhook: ${{ secrets.SLACK_WEBHOOK }}
-          slack-text: ${{ needs.build.outputs.notify-slack-text }}
+          slack-text: 'Deploy finished for PR #${{ github.event.pull_request.number }}'
           pr-number: ${{ github.event.pull_request.number }}
-          pr-body: ${{ needs.deploy.outputs.notify-pr-body }}
+          pr-body: 'Service URL: ${{ needs.deploy.outputs.service-url }}'
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
