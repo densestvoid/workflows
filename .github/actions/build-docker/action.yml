@@ -43,10 +43,7 @@ runs:
       run: |
         set -euo pipefail
         ARTIFACT_NAME='${{ inputs.artifact-name }}'
-        if [ -z "$ARTIFACT_NAME" ]; then
-          ARTIFACT_NAME=$(dirname '${{ inputs.dockerfile }}')
-          [ "$ARTIFACT_NAME" = "." ] && ARTIFACT_NAME=$(basename "$(pwd)")
-        fi
+        ARTIFACT_NAME="${ARTIFACT_NAME:-$(basename "$(dirname "$(realpath '${{ inputs.dockerfile }}')")")}"
         echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
 
         docker buildx build \
