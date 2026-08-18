@@ -39,10 +39,11 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        echo "TFVARS_FILE=${RUNNER_TEMP}/tfvars.json" >> "$GITHUB_ENV"
-        printf '%s' '${{ inputs.variables-json }}' > "$TFVARS_FILE"
+        tfvars_file="${RUNNER_TEMP}/tfvars.json"
+        echo "TFVARS_FILE=${tfvars_file}" >> "$GITHUB_ENV"
+        printf '%s' '${{ inputs.variables-json }}' > "$tfvars_file"
         # jq empty: parse the file as JSON and exit non-zero if invalid (fail before init/apply).
-        jq empty "$TFVARS_FILE"
+        jq empty "$tfvars_file"
 
     - name: Terraform init
       shell: bash
