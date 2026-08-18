@@ -64,7 +64,7 @@ Composite actions for all v0 steps.
 | Current | Rename to | Purpose |
 |---------|-----------|---------|
 | `setup/` | `setup-go/` | Checkout + Go toolchain setup |
-| `install-tool/` | `install-go-tool/` | Install + **cache** a Go CLI tool (`actions/cache` on `~/go/bin/<tool>`) |
+| `install-tool/` | `install-go-tool/` | Install + **cache** a Go CLI tool (`actions/cache` on `~/go/bin/…`) |
 
 **Go Checks** (`go-checks.yml`) — update to use renamed actions. App repos call **detect-changes** separately (e.g. Go paths for CI skip).
 
