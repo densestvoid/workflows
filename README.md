@@ -98,7 +98,7 @@ jobs:
         if: steps.deploy-changes.outputs.changed == 'true'
         with:
           dockerfile: Dockerfile
-          artifact: ${{ steps.build-go.outputs.artifact-name }}
+          artifacts: ${{ steps.build-go.outputs.artifact-name }}
 
       - uses: densestvoid/workflows/.github/actions/push-container@main
         id: push
@@ -226,7 +226,7 @@ Call once per output. Or run `terraform output -raw <name>` directly — `setup-
 
 ### build-docker artifacts
 
-`upload-artifact` stores files in GitHub's artifact service — they are not kept on disk for later steps. **build-docker** also runs a fresh checkout, which wipes the workspace. When a prior step (e.g. **build-go**) produced a binary, pass its artifact name via `artifact` and **build-docker** downloads it with `actions/download-artifact` before `docker build`.
+`upload-artifact` stores files in GitHub's artifact service — they are not kept on disk for later steps. **build-docker** also runs a fresh checkout, which wipes the workspace. Pass prior artifact names via `artifacts` (multiline); the action downloads them with a single `actions/download-artifact` call using a glob pattern (`budget` or `{budget,worker}`).
 
 Split build and docker across jobs by downloading artifacts in the caller workflow between jobs.
 
@@ -235,7 +235,7 @@ Split build and docker across jobs by downloading artifacts in the caller workfl
 | Area | Limitation |
 |------|------------|
 | **build-go** | `CGO_ENABLED=0` hardcoded — cgo packages won't build |
-| **build-docker** | `actions/download-artifact` when `artifact` is set; required because checkout wipes workspace |
+| **build-docker** | `actions/download-artifact` when `artifacts` is set; required because checkout wipes workspace |
 | **Testing** | No integration tests in this repo — validate via krogerrecipeshopper rollout |
 
 ## Rollout
