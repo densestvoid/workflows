@@ -1,5 +1,8 @@
 name: 'Deploy Terraform'
-description: 'Terraform init and apply with variables-json as a temp var-file and do-token as -var'
+description: >-
+  Terraform init and apply. Pass Terraform variables via TF_VAR_* env on the
+  invoking workflow step (e.g. TF_VAR_do_token). AWS S3 backend settings are
+  action inputs.
 inputs:
   terraform-dir:
     description: 'Path to Terraform root module in the caller repo'
@@ -7,10 +10,6 @@ inputs:
   backend-key:
     description: 'S3 state key'
     required: true
-  do-token:
-    description: 'DigitalOcean API token (passed to terraform apply as -var=do_token=...)'
-    required: false
-    default: ''
   terraform-aws-access-key-id:
     description: 'S3 backend access key ID (passed to terraform init -backend-config)'
     required: true
@@ -20,10 +19,6 @@ inputs:
   terraform-aws-region:
     description: 'S3 backend region (passed to terraform init -backend-config)'
     required: true
-  variables-json:
-    description: 'JSON object of Terraform variables (default {}). Written to TFVARS_FILE in the prepare step'
-    required: false
-    default: '{}'
 runs:
   using: 'composite'
   steps:
@@ -34,16 +29,6 @@ runs:
       uses: hashicorp/setup-terraform@v4
       with:
         terraform_wrapper: false
-
-    - name: Prepare Terraform variables
-      shell: bash
-      run: |
-        set -euo pipefail
-        tfvars_file="${RUNNER_TEMP}/tfvars.json"
-        echo "TFVARS_FILE=${tfvars_file}" >> "$GITHUB_ENV"
-        printf '%s' '${{ inputs.variables-json }}' > "$tfvars_file"
-        # jq empty: parse the file as JSON and exit non-zero if invalid (fail before init/apply).
-        jq empty "$tfvars_file"
 
     - name: Terraform init
       shell: bash
@@ -61,6 +46,4 @@ runs:
       working-directory: ${{ inputs.terraform-dir }}
       run: |
         set -euo pipefail
-        terraform apply -auto-approve \
-          -var-file="$TFVARS_FILE" \
-          ${{ inputs.do-token != '' && format('-var=do_token={0}', inputs.do-token) || '' }}
+        terraform apply -auto-approve

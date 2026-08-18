@@ -26,7 +26,7 @@ Pair with **detect-changes** in the caller repo to skip when Go sources are unch
 | [build-go](.github/actions/build-go) | One Go binary → artifact (binary cache keyed by dep-tree source contents) |
 | [build-docker](.github/actions/build-docker) | One Docker image → artifact (BuildKit `type=gha` layer cache) |
 | [push-container](.github/actions/push-container) | Load image artifact; push to GHCR and/or Docker Hub |
-| [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`variables-json` → `-var-file`) |
+| [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`TF_VAR_*` env on the invoking step) |
 | [terraform-output](.github/actions/terraform-output) | Read one Terraform output (same job, after deploy) |
 | [terminate-terraform](.github/actions/terminate-terraform) | Empty-module destroy + S3 state delete |
 | [notify](.github/actions/notify) | Slack + PR comment delivery |
