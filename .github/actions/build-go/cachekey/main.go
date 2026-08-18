@@ -6,27 +6,26 @@ import (
 	"encoding/hex"
 	"flag"
 	"fmt"
-	"go/build"
 	"hash"
 	"io"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
 
 func main() {
-	mainPackage := flag.String("main-package", "", "main package path (e.g. ./cmd/server)")
+	var mainPackage string
+	flag.StringVar(&mainPackage, "main-package", "", "main package path (e.g. ./cmd/server)")
 	flag.Parse()
 
-	if *mainPackage == "" {
+	if mainPackage == "" {
 		fmt.Fprintln(os.Stderr, "cachekey: --main-package is required")
 		os.Exit(2)
 	}
 
-	key, err := fingerprint(*mainPackage)
+	key, err := fingerprint(mainPackage)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "cachekey: %v\n", err)
 		os.Exit(1)
@@ -51,15 +50,10 @@ func fingerprint(mainPackage string) (string, error) {
 
 func sourcePaths(mainPackage string) ([]string, error) {
 	pathSet := make(map[string]struct{})
-
-	for _, moduleFile := range []string{"go.mod", "go.sum"} {
-		if _, err := os.Stat(moduleFile); err == nil {
-			pathSet[moduleFile] = struct{}{}
-		}
-	}
+	seenModules := make(map[string]struct{})
 
 	cfg := &packages.Config{
-		Mode: packages.NeedName | packages.NeedFiles | packages.NeedEmbedFiles | packages.NeedDeps,
+		Mode: packages.NeedName | packages.NeedFiles | packages.NeedEmbedFiles | packages.NeedDeps | packages.NeedModule,
 		Env:  append(os.Environ(), "CGO_ENABLED=0"),
 	}
 
@@ -73,8 +67,21 @@ func sourcePaths(mainPackage string) ([]string, error) {
 			return nil, fmt.Errorf("%s: %s", pkg.PkgPath, loadErr.Msg)
 		}
 
-		if isStandardLibrary(pkg) {
+		// Module is nil for standard library packages (see packages.Package docs).
+		if pkg.Module == nil {
 			continue
+		}
+
+		if pkg.Module.GoMod != "" {
+			if _, seen := seenModules[pkg.Module.GoMod]; !seen {
+				seenModules[pkg.Module.GoMod] = struct{}{}
+				pathSet[pkg.Module.GoMod] = struct{}{}
+
+				goSum := filepath.Join(filepath.Dir(pkg.Module.GoMod), "go.sum")
+				if _, err := os.Stat(goSum); err == nil {
+					pathSet[goSum] = struct{}{}
+				}
+			}
 		}
 
 		for _, path := range append(pkg.GoFiles, pkg.EmbedFiles...) {
@@ -89,25 +96,6 @@ func sourcePaths(mainPackage string) ([]string, error) {
 	sort.Strings(paths)
 
 	return paths, nil
-}
-
-func isStandardLibrary(pkg *packages.Package) bool {
-	if pkg.Module != nil {
-		return false
-	}
-
-	if len(pkg.GoFiles) == 0 {
-		return pkg.PkgPath == "unsafe" || pkg.PkgPath == "C"
-	}
-
-	goroot := filepath.Clean(build.Default.GOROOT) + string(filepath.Separator)
-	for _, file := range pkg.GoFiles {
-		if !strings.HasPrefix(filepath.Clean(file), goroot) {
-			return false
-		}
-	}
-
-	return true
 }
 
 func hashPaths(paths []string) ([]byte, error) {
