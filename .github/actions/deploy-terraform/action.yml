@@ -1,5 +1,8 @@
 name: 'Deploy Terraform'
-description: 'Terraform init and apply with variables passed as a JSON var-file'
+description: >-
+  Terraform init and apply. Caller variables-json is written to a temp
+  ci.auto.tfvars.json (-var-file); do-token is merged as do_token. S3 backend
+  credentials are passed via -backend-config at init (not Terraform variables).
 inputs:
   terraform-dir:
     description: 'Path to Terraform root module in the caller repo'
@@ -8,20 +11,24 @@ inputs:
     description: 'S3 state key'
     required: true
   do-token:
-    description: 'DigitalOcean API token'
+    description: >-
+      DigitalOcean API token. Merged into ci.auto.tfvars.json as do_token (not
+      passed via variables-json) so callers keep secrets on a dedicated input.
     required: false
     default: ''
   terraform-aws-access-key-id:
-    description: 'S3 backend access key ID'
+    description: 'S3 backend access key ID (passed to terraform init -backend-config)'
     required: true
   terraform-aws-secret-access-key:
-    description: 'S3 backend secret access key'
+    description: 'S3 backend secret access key (passed to terraform init -backend-config)'
     required: true
   terraform-aws-region:
-    description: 'S3 backend region'
+    description: 'S3 backend region (passed to terraform init -backend-config)'
     required: true
   variables-json:
-    description: 'JSON object of Terraform variables (e.g. {"deployment_id":"pr-42"})'
+    description: >-
+      JSON object of Terraform module variables (e.g. {"deployment_id":"pr-42"}).
+      Written to a temp var-file; use {} when no extra variables are needed.
     required: false
     default: '{}'
 runs:
@@ -35,33 +42,48 @@ runs:
       with:
         terraform_wrapper: false
 
-    - name: Init and apply
+    - name: Prepare Terraform variables
       shell: bash
-      env:
-        AWS_ACCESS_KEY_ID: ${{ inputs.terraform-aws-access-key-id }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.terraform-aws-secret-access-key }}
-        AWS_REGION: ${{ inputs.terraform-aws-region }}
-        DO_TOKEN: ${{ inputs.do-token }}
-        VARIABLES_JSON: ${{ inputs.variables-json }}
       run: |
         set -euo pipefail
-        cd "${{ inputs.terraform-dir }}"
 
-        TFVARS="${RUNNER_TEMP}/ci.auto.tfvars.json"
-        if [ -z "$VARIABLES_JSON" ] || [ "$VARIABLES_JSON" = "{}" ]; then
-          echo '{}' > "$TFVARS"
+        tfvars="${RUNNER_TEMP}/ci.auto.tfvars.json"
+        variables_json='${{ inputs.variables-json }}'
+        do_token='${{ inputs.do-token }}'
+
+        # Write variables-json to a temp var-file for terraform apply.
+        # Empty or {} yields a valid empty JSON object so -var-file always works.
+        # printf (not echo) writes the JSON as-is without interpreting escapes.
+        if [ -z "$variables_json" ] || [ "$variables_json" = "{}" ]; then
+          echo '{}' > "$tfvars"
         else
-          printf '%s' "$VARIABLES_JSON" > "$TFVARS"
+          printf '%s' "$variables_json" > "$tfvars"
         fi
-        jq empty "$TFVARS"
+        jq empty "$tfvars"
 
-        if [ -n "$DO_TOKEN" ]; then
-          jq --arg token "$DO_TOKEN" '. + {do_token: $token}' "$TFVARS" > "${TFVARS}.tmp"
-          mv "${TFVARS}.tmp" "$TFVARS"
+        # Merge do-token into the var-file as do_token when provided.
+        # jq handles JSON escaping; write to .tmp then mv for an atomic update.
+        if [ -n "$do_token" ]; then
+          jq --arg token "$do_token" '. + {do_token: $token}' "$tfvars" > "${tfvars}.tmp"
+          mv "${tfvars}.tmp" "$tfvars"
         fi
 
+        echo "TFVARS=${tfvars}" >> "$GITHUB_ENV"
+
+    - name: Terraform init
+      shell: bash
+      working-directory: ${{ inputs.terraform-dir }}
+      run: |
+        set -euo pipefail
         terraform init \
           -backend-config="key=${{ inputs.backend-key }}" \
-          -backend-config="region=${{ inputs.terraform-aws-region }}"
+          -backend-config="region=${{ inputs.terraform-aws-region }}" \
+          -backend-config="access_key=${{ inputs.terraform-aws-access-key-id }}" \
+          -backend-config="secret_key=${{ inputs.terraform-aws-secret-access-key }}"
 
+    - name: Terraform apply
+      shell: bash
+      working-directory: ${{ inputs.terraform-dir }}
+      run: |
+        set -euo pipefail
         terraform apply -auto-approve -var-file="$TFVARS"
