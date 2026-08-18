@@ -21,7 +21,7 @@ inputs:
     description: 'S3 backend region (passed to terraform init -backend-config)'
     required: true
   variables-json:
-    description: 'JSON object of Terraform variables (default {}). Written to ${RUNNER_TEMP}/ci.auto.tfvars.json'
+    description: 'JSON object of Terraform variables (default {}). Written to TFVARS_FILE in the prepare step'
     required: false
     default: '{}'
 runs:
@@ -39,8 +39,10 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        printf '%s' '${{ inputs.variables-json }}' > "${RUNNER_TEMP}/ci.auto.tfvars.json"
-        jq empty "${RUNNER_TEMP}/ci.auto.tfvars.json"
+        echo "TFVARS_FILE=${RUNNER_TEMP}/tfvars.json" >> "$GITHUB_ENV"
+        printf '%s' '${{ inputs.variables-json }}' > "$TFVARS_FILE"
+        # jq empty: parse the file as JSON and exit non-zero if invalid (fail before init/apply).
+        jq empty "$TFVARS_FILE"
 
     - name: Terraform init
       shell: bash
@@ -59,5 +61,5 @@ runs:
       run: |
         set -euo pipefail
         terraform apply -auto-approve \
-          -var-file="${RUNNER_TEMP}/ci.auto.tfvars.json" \
+          -var-file="$TFVARS_FILE" \
           ${{ inputs.do-token != '' && format('-var=do_token={0}', inputs.do-token) || '' }}

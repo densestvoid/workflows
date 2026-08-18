@@ -221,7 +221,7 @@ go-checks:
 
 ### Terraform
 
-**deploy-terraform** writes `${RUNNER_TEMP}/ci.auto.tfvars.json` from `variables-json` and applies with `-var-file`; `do-token` is passed as `-var=do_token=...`. S3 backend credentials use `terraform init -backend-config` (`access_key`, `secret_key`, `key`, `region`). App Terraform modules must declare `backend "s3"` with bucket and partial config; the action overrides `key` and `region` at init.
+**deploy-terraform** writes `variables-json` to a temp file (`TFVARS_FILE` in `${RUNNER_TEMP}/tfvars.json`) and applies with `-var-file`; `do-token` is passed as `-var=do_token=...`. S3 backend credentials use `terraform init -backend-config` (`access_key`, `secret_key`, `key`, `region`). App Terraform modules must declare `backend "s3"` with bucket and partial config; the action overrides `key` and `region` at init.
 
 **terminate-terraform** uses a partial S3 backend in `pr-destroy` — pass `terraform-s3-bucket`, `backend-key`, and `terraform-aws-region` at init (same bucket your deploy module declares).
 
