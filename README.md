@@ -16,7 +16,7 @@ jobs:
     uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
 ```
 
-Pair with **detect-changes** in the caller repo to skip when Go sources are unchanged. For repos with multiple `go.mod` files, pass `working-directory` — see [Go module layout](#go-module-layout).
+Pair with **detect-changes** in the caller repo to skip when Go sources are unchanged. For repos with multiple `go.mod` files, pass `working-directory` to **go-checks** — see [Go module layout](#go-module-layout).
 
 ## Actions
 
@@ -199,6 +199,26 @@ Every action that needs source code checks out the full repo itself. Callers sho
 ### push-container (GHCR)
 
 Requires `packages: write` and a token with `write:packages`. Uses `docker/login-action` for registry auth. Use a PAT when `GITHUB_TOKEN` lacks package scope.
+
+### Go module layout
+
+When `go.mod` is at the repo root (typical), only pass `main-package` to **build-go** — `working-directory` defaults to `.`.
+
+For nested modules (multiple `go.mod` in one repo), set `working-directory` to the module root on **build-go** and **go-checks**:
+
+```yaml
+- uses: densestvoid/workflows/.github/actions/build-go@main
+  with:
+    working-directory: backend
+    main-package: ./cmd/api
+```
+
+```yaml
+go-checks:
+  uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
+  with:
+    working-directory: backend
+```
 
 ### Terraform
 

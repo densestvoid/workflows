@@ -1,10 +1,6 @@
 name: 'Build Go'
 description: 'Build one Go binary and upload as artifact (cached internally)'
 inputs:
-  working-directory:
-    description: 'Go module root (default .). Set when go.mod is not at the repo root.'
-    required: false
-    default: '.'
   main-package:
     description: 'Package path to build (e.g. ./cmd/server)'
     required: true
@@ -25,8 +21,8 @@ runs:
     - name: Setup Go
       uses: actions/setup-go@v5
       with:
-        go-version-file: ${{ inputs.working-directory == '.' && 'go.mod' || format('{0}/go.mod', inputs.working-directory) }}
-        cache-dependency-path: ${{ inputs.working-directory == '.' && 'go.sum' || format('{0}/go.sum', inputs.working-directory) }}
+        go-version-file: go.mod
+        cache-dependency-path: go.sum
 
     - name: Resolve artifact name
       shell: bash
@@ -39,7 +35,6 @@ runs:
     - name: Compute cache key
       id: cache-key
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: |
         set -euo pipefail
         cache_key=$(
@@ -70,7 +65,6 @@ runs:
     - name: Build binary
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
-      working-directory: ${{ inputs.working-directory }}
       run: CGO_ENABLED=0 GOOS=linux go build -o "${{ runner.temp }}/build-go-${{ env.ARTIFACT_NAME }}" '${{ inputs.main-package }}'
 
     - name: Copy binary to workspace
