@@ -178,7 +178,7 @@ jobs:
 
 | Action | Mechanism |
 |--------|-----------|
-| **build-go** | `actions/cache` keyed on `go.mod`/`go.sum` + `go list -deps` source file contents |
+| **build-go** | `actions/cache` on binary at repo root; key from `go.mod`/`go.sum` + source tree (`go list -deps` + `tar`) |
 | **build-docker** | BuildKit `--cache-from` / `--cache-to type=gha` (`.dockerignore` applied natively) |
 | **install-go-tool** | `actions/cache` on `~/go/bin/<tool>` per package |
 
@@ -202,16 +202,15 @@ Requires `packages: write` and a token with `write:packages`. Uses `docker/login
 
 ### Go module layout
 
-When `go.mod` is at the repo root (typical), only pass `main-package` to **build-go** — `working-directory` defaults to `.`.
-
-For nested modules (multiple `go.mod` in one repo), set `working-directory` to the module root on **build-go** and **go-checks**:
+**build-go** expects `go.mod` at the repo root. Pass only `main-package`:
 
 ```yaml
 - uses: densestvoid/workflows/.github/actions/build-go@main
   with:
-    working-directory: backend
     main-package: ./cmd/api
 ```
+
+For nested modules (multiple `go.mod` in one repo), pass `working-directory` to **go-checks**:
 
 ```yaml
 go-checks:

@@ -8,6 +8,14 @@ inputs:
     description: 'Artifact name and binary filename at repo root (default: basename of main-package)'
     required: false
     default: ''
+  goos:
+    description: 'GOOS for go build'
+    required: false
+    default: 'linux'
+  goarch:
+    description: 'GOARCH for go build'
+    required: false
+    default: 'amd64'
 outputs:
   artifact-name:
     description: 'Artifact name for downstream download'
@@ -37,21 +45,14 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        list_template='{{if not .Standard}}{{range .GoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{range .EmbedFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{range .CgoFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{range .CFiles}}{{$.Dir}}/{{.}}{{"\n"}}{{end}}{{end}}'
         cache_key=$(
           {
             for module_file in go.mod go.sum; do
-              [ -f "$module_file" ] && cat "$module_file"
+              [ -f "$module_file" ] && printf '%s\n' "$module_file"
             done
-            for file in $(
-              go list -deps -json '${{ inputs.main-package }}' | jq -r '
-                select(.Standard != true) | .Dir as $d |
-                ((.GoFiles // []) + (.EmbedFiles // []) + (.CgoFiles // []) + (.CFiles // [])[])[] |
-                "\($d)/\(.)"
-              ' | sort -u
-            ); do
-              cat "$file"
-            done
-          } | sha256sum | awk '{print $1}'
+            go list -deps -f "$list_template" '${{ inputs.main-package }}'
+          } | sort -u | tar -c --files-from - | sha256sum | cut -d' ' -f1
         )
         echo "cache_key=${cache_key}" >> "$GITHUB_OUTPUT"
 
@@ -59,17 +60,13 @@ runs:
       id: cache
       uses: actions/cache@v4
       with:
-        path: ${{ runner.temp }}/build-go-${{ env.ARTIFACT_NAME }}
-        key: build-go-${{ steps.cache-key.outputs.cache_key }}
+        path: ${{ env.ARTIFACT_NAME }}
+        key: build-go-${{ steps.cache-key.outputs.cache_key }}-${{ inputs.goos }}-${{ inputs.goarch }}
 
     - name: Build binary
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
-      run: CGO_ENABLED=0 GOOS=linux go build -o "${{ runner.temp }}/build-go-${{ env.ARTIFACT_NAME }}" '${{ inputs.main-package }}'
-
-    - name: Copy binary to workspace
-      shell: bash
-      run: cp "${{ runner.temp }}/build-go-${{ env.ARTIFACT_NAME }}" "${{ GITHUB_WORKSPACE }}/${{ env.ARTIFACT_NAME }}"
+      run: CGO_ENABLED=0 GOOS=${{ inputs.goos }} GOARCH=${{ inputs.goarch }} go build -o "${{ env.ARTIFACT_NAME }}" '${{ inputs.main-package }}'
 
     - name: Upload binary artifact
       uses: actions/upload-artifact@v7
