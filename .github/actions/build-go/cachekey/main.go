@@ -8,11 +8,9 @@ import (
 	"fmt"
 	"hash"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
-	"strings"
 
 	"golang.org/x/tools/go/packages"
 )
@@ -37,12 +35,12 @@ func main() {
 }
 
 func fingerprint(mainPackage string) (string, error) {
-	paths, err := sourcePaths(mainPackage)
+	files, patterns, err := collectInputs(mainPackage)
 	if err != nil {
 		return "", err
 	}
 
-	sum, err := hashPaths(paths)
+	sum, err := hashInputs(files, patterns)
 	if err != nil {
 		return "", err
 	}
@@ -50,8 +48,9 @@ func fingerprint(mainPackage string) (string, error) {
 	return hex.EncodeToString(sum), nil
 }
 
-func sourcePaths(mainPackage string) ([]string, error) {
-	pathSet := make(map[string]struct{})
+func collectInputs(mainPackage string) ([]string, []string, error) {
+	fileSet := make(map[string]struct{})
+	patternSet := make(map[string]struct{})
 	seenModules := make(map[string]struct{})
 
 	cfg := &packages.Config{
@@ -66,12 +65,12 @@ func sourcePaths(mainPackage string) ([]string, error) {
 
 	pkgs, err := packages.Load(cfg, mainPackage)
 	if err != nil {
-		return nil, fmt.Errorf("load packages: %w", err)
+		return nil, nil, fmt.Errorf("load packages: %w", err)
 	}
 
 	for _, pkg := range pkgs {
 		for _, loadErr := range pkg.Errors {
-			return nil, fmt.Errorf("%s: %s", pkg.PkgPath, loadErr.Msg)
+			return nil, nil, fmt.Errorf("%s: %s", pkg.PkgPath, loadErr.Msg)
 		}
 
 		// Module is nil for standard library packages (see packages.Package docs).
@@ -82,101 +81,48 @@ func sourcePaths(mainPackage string) ([]string, error) {
 		if pkg.Module.GoMod != "" {
 			if _, seen := seenModules[pkg.Module.GoMod]; !seen {
 				seenModules[pkg.Module.GoMod] = struct{}{}
-				pathSet[pkg.Module.GoMod] = struct{}{}
+				fileSet[pkg.Module.GoMod] = struct{}{}
 
 				goSum := filepath.Join(filepath.Dir(pkg.Module.GoMod), "go.sum")
 				if _, err := os.Stat(goSum); err == nil {
-					pathSet[goSum] = struct{}{}
+					fileSet[goSum] = struct{}{}
 				}
 			}
 		}
 
 		for _, path := range pkg.GoFiles {
-			pathSet[path] = struct{}{}
+			fileSet[path] = struct{}{}
 		}
 		for _, path := range pkg.EmbedFiles {
-			pathSet[path] = struct{}{}
+			fileSet[path] = struct{}{}
 		}
-		if err := addEmbedPatternPaths(pathSet, pkg.EmbedPatterns); err != nil {
-			return nil, err
+		for _, pattern := range pkg.EmbedPatterns {
+			patternSet[pattern] = struct{}{}
 		}
 	}
 
-	paths := make([]string, 0, len(pathSet))
-	for path := range pathSet {
-		paths = append(paths, path)
-	}
-	sort.Strings(paths)
-
-	return paths, nil
+	return sortedKeys(fileSet), sortedKeys(patternSet), nil
 }
 
-func addEmbedPatternPaths(pathSet map[string]struct{}, patterns []string) error {
-	for _, pattern := range patterns {
-		matches, err := expandEmbedPattern(pattern)
-		if err != nil {
-			return fmt.Errorf("expand embed pattern %q: %w", pattern, err)
-		}
-
-		for _, match := range matches {
-			pathSet[match] = struct{}{}
-		}
+func sortedKeys(set map[string]struct{}) []string {
+	keys := make([]string, 0, len(set))
+	for key := range set {
+		keys = append(keys, key)
 	}
-
-	return nil
+	sort.Strings(keys)
+	return keys
 }
 
-func expandEmbedPattern(pattern string) ([]string, error) {
-	if pattern == "" {
-		return nil, nil
-	}
-
-	if strings.HasSuffix(pattern, "/...") {
-		root := strings.TrimSuffix(pattern, "/...")
-		var matches []string
-		err := filepath.WalkDir(root, func(path string, entry fs.DirEntry, walkErr error) error {
-			if walkErr != nil {
-				return walkErr
-			}
-			if entry.IsDir() {
-				return nil
-			}
-			matches = append(matches, path)
-			return nil
-		})
-		if err != nil {
-			if os.IsNotExist(err) {
-				return []string{pattern}, nil
-			}
-			return nil, err
-		}
-		if len(matches) == 0 {
-			return []string{pattern}, nil
-		}
-		return matches, nil
-	}
-
-	matches, err := filepath.Glob(pattern)
-	if err != nil {
-		return nil, err
-	}
-	if len(matches) > 0 {
-		return matches, nil
-	}
-
-	if _, err := os.Stat(pattern); err == nil {
-		return []string{pattern}, nil
-	}
-
-	// Fingerprint the pattern itself when it has no matches yet.
-	return []string{pattern}, nil
-}
-
-func hashPaths(paths []string) ([]byte, error) {
+func hashInputs(files, patterns []string) ([]byte, error) {
 	hasher := sha256.New()
 
-	for _, path := range paths {
+	for _, path := range files {
 		if err := hashFile(hasher, path); err != nil {
+			return nil, err
+		}
+	}
+	for _, pattern := range patterns {
+		if err := hashLiteral(hasher, pattern); err != nil {
 			return nil, err
 		}
 	}
@@ -184,25 +130,17 @@ func hashPaths(paths []string) ([]byte, error) {
 	return hasher.Sum(nil), nil
 }
 
-func hashFile(hasher hash.Hash, path string) error {
-	if _, err := io.WriteString(hasher, path); err != nil {
-		return fmt.Errorf("hash path %s: %w", path, err)
+func hashLiteral(hasher hash.Hash, value string) error {
+	if _, err := io.WriteString(hasher, value); err != nil {
+		return fmt.Errorf("hash literal %q: %w", value, err)
 	}
-	if _, err := hasher.Write([]byte{0}); err != nil {
-		return fmt.Errorf("hash path %s: %w", path, err)
-	}
+	_, err := hasher.Write([]byte{0})
+	return err
+}
 
-	info, err := os.Stat(path)
-	if err != nil {
-		if os.IsNotExist(err) {
-			// Embed pattern with no matching files yet.
-			_, writeErr := io.WriteString(hasher, "pattern")
-			return writeErr
-		}
-		return fmt.Errorf("stat %s: %w", path, err)
-	}
-	if info.IsDir() {
-		return fmt.Errorf("hash %s: directories are not fingerprinted directly", path)
+func hashFile(hasher hash.Hash, path string) error {
+	if err := hashLiteral(hasher, path); err != nil {
+		return err
 	}
 
 	file, err := os.Open(path)

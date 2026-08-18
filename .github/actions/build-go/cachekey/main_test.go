@@ -19,12 +19,12 @@ func TestHashPathsStable(t *testing.T) {
 	}
 
 	paths := []string{first, second}
-	firstHash, err := hashPaths(paths)
+	firstHash, err := hashInputs(paths, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	secondHash, err := hashPaths(paths)
+	secondHash, err := hashInputs(paths, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestHashPathsStable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changedHash, err := hashPaths(append(paths, changed))
+	changedHash, err := hashInputs(append(paths, changed), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,54 +48,25 @@ func TestHashPathsStable(t *testing.T) {
 	}
 }
 
-func TestSourcePathsIncludesModuleAndSources(t *testing.T) {
-	dir := t.TempDir()
-
-	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/app\n\ngo 1.22\n")
-	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nfunc main() {}\n")
-	writeFile(t, filepath.Join(dir, "helper.go"), "package main\n\nfunc helper() int { return 1 }\n")
-
-	chdir(t, dir)
-
-	paths, err := sourcePaths(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	assertBasenamesFound(t, paths, "go.mod", "main.go", "helper.go")
-}
-
-func TestSourcePathsIncludesEmbedPatterns(t *testing.T) {
+func TestCollectInputsIncludesModuleSourcesAndEmbeds(t *testing.T) {
 	dir := t.TempDir()
 
 	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/app\n\ngo 1.22\n")
 	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nimport _ \"embed\"\n\n//go:embed assets/*\nvar assets string\n\nfunc main() {}\n")
+	writeFile(t, filepath.Join(dir, "helper.go"), "package main\n\nfunc helper() int { return 1 }\n")
 	writeFile(t, filepath.Join(dir, "assets", "data.txt"), "payload\n")
 
 	chdir(t, dir)
 
-	paths, err := sourcePaths(".")
+	files, patterns, err := collectInputs(".")
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	assertBasenamesFound(t, paths, "go.mod", "main.go", "data.txt")
-}
-
-func TestExpandEmbedPatternRecursive(t *testing.T) {
-	dir := t.TempDir()
-	nested := filepath.Join(dir, "static", "nested")
-	if err := os.MkdirAll(nested, 0o755); err != nil {
-		t.Fatal(err)
+	assertBasenamesFound(t, files, "go.mod", "main.go", "helper.go", "data.txt")
+	if len(patterns) == 0 {
+		t.Fatalf("expected embed patterns, got %v", patterns)
 	}
-	writeFile(t, filepath.Join(nested, "page.html"), "<html></html>\n")
-
-	matches, err := expandEmbedPattern(filepath.Join(dir, "static", "..."))
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	assertBasenamesFound(t, matches, "page.html")
 }
 
 func assertBasenamesFound(t *testing.T, paths []string, want ...string) {
