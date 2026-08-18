@@ -14,11 +14,9 @@ Parallel Go quality checks: vet, staticcheck, golangci-lint, govulncheck, gosec.
 jobs:
   go-checks:
     uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
-    with:
-      working-directory: '.'
 ```
 
-Pair with **detect-changes** in the caller repo to skip when Go sources are unchanged.
+Pair with **detect-changes** in the caller repo to skip when Go sources are unchanged. For repos with multiple `go.mod` files, pass `working-directory` — see [Go module layout](#go-module-layout).
 
 ## Actions
 

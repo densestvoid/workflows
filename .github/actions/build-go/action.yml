@@ -2,7 +2,7 @@ name: 'Build Go'
 description: 'Build one Go binary and upload as artifact (cached internally)'
 inputs:
   working-directory:
-    description: 'Go module root'
+    description: 'Go module root (default .). Set when go.mod is not at the repo root.'
     required: false
     default: '.'
   main-package:
