@@ -106,7 +106,7 @@ Generalized change detection for **any** path set — not language-specific. Cal
 | `changed` | `true` when any matched path changed vs base |
 | `content-key` | Content hash of matched paths (for **build-go** cache and caller-driven skip/`tag` decisions) |
 
-**Checkout:** Sparse — only files matching `paths`. Minimum git history for merge-base. Own checkout; caller does not pre-checkout.
+**Checkout:** Full repo (`fetch-depth: 0` for merge-base). Own checkout; caller does not pre-checkout.
 
 Examples:
 
@@ -153,7 +153,7 @@ Whether to call **build-go** at all (e.g. when sources unchanged) is a **caller 
 
 **Artifact:** Single binary file at repo root — straightforward upload and `gh run download` into Docker context.
 
-**Checkout:** Sparse — Go sources + `go.mod`/`go.sum` only.
+**Checkout:** Full repo.
 
 ---
 
@@ -183,7 +183,7 @@ Whether to call **build-docker** is a **caller `if:`** decision. Cache restore i
 
 **No registry, no push, no Terraform.**
 
-**Checkout:** Sparse — Dockerfile + context files; input artifacts downloaded separately.
+**Checkout:** Full repo.
 
 ---
 
@@ -237,7 +237,7 @@ Infra secrets (`do-token`, `terraform-aws-s3-*`) are **action inputs** — calle
 
 **Domain / complex types:** CI passes scalars only. Structured values (e.g. `{ hostname, zone }`) are built in Terraform `locals` inside the app module — not in CI.
 
-**Checkout:** Sparse — `terraform-dir` only.
+**Checkout:** Full repo.
 
 #### Variable wiring
 
@@ -263,6 +263,16 @@ Destroy from existing state using the **workflows-repo** `pr-destroy` empty modu
 | `state-deleted` | `true` when S3 state file removed |
 
 **Checkout:** Bundled `pr-destroy` module at `${{ github.action_path }}/pr-destroy` — no separate repo checkout.
+
+#### Why `github.action_path`?
+
+When an app workflow calls `densestvoid/workflows/.github/actions/terminate-terraform@v1`, GitHub copies **only that action directory** onto the runner — not the rest of the workflows repo. A sibling path like `.github/terraform/pr-destroy` at repo root is **not** present on the runner.
+
+Bundling `pr-destroy/` inside the action directory and referencing `${{ github.action_path }}/pr-destroy` means:
+
+- The module **versions with the action pin** (`@v1`, `@main`, etc.) — no separate workflows checkout or `workflows-ref` input
+- `terraform init` runs against files that are always on disk when the action runs
+- No dependency on sparse checkout or caller repo layout
 
 ---
 
@@ -364,19 +374,18 @@ Multiple binaries or images: add another **build-go** / **build-docker** / **pus
 
 ## Checkout convention
 
-**Every action checks out exactly what it needs — no more.** Sparse paths, minimum history, no full-repo clones. Callers should not pre-checkout for actions.
+**Every action that needs source code does a full repo checkout.** Callers should not pre-checkout for actions.
 
 | Action | Checkout scope |
 |--------|----------------|
-| detect-changes | Sparse: only `paths` globs; minimum history for merge-base |
-| Build Go | Go sources + module files for build |
-| Build Docker | Dockerfile + context files; input artifacts downloaded |
-| Push Container | None (downloads image artifact only) |
-| Deploy Terraform | `terraform-dir` only |
-| Terminate Terraform | Workflows-repo `pr-destroy` module only |
-| Notify | None |
-
-Existing **setup-go** does full checkout — acceptable for Go Checks; new actions follow the thin convention above.
+| detect-changes | Full repo (`fetch-depth: 0` for merge-base) |
+| build-go | Full repo |
+| build-docker | Full repo; input artifacts downloaded separately |
+| push-container | None (downloads image artifact only) |
+| deploy-terraform | Full repo |
+| terminate-terraform | Bundled `pr-destroy` module only (`github.action_path`) |
+| notify | None |
+| setup-go | Full repo |
 
 ---
 

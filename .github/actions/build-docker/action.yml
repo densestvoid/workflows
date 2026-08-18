@@ -42,11 +42,6 @@ runs:
 
     - name: Checkout Docker context
       uses: actions/checkout@v4
-      with:
-        sparse-checkout-cone-mode: false
-        sparse-checkout: |
-          ${{ inputs.dockerfile }}
-          ${{ inputs.context }}/**
 
     - name: Download input artifacts
       if: ${{ inputs.artifacts != '' }}

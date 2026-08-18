@@ -49,15 +49,11 @@ runs:
     - name: Comment on PR
       if: always() && steps.delivery.outputs.send_pr == 'true'
       uses: actions/github-script@v7
-      env:
-        PR_NUMBER: ${{ inputs.pr-number }}
-        PR_BODY: ${{ inputs.pr-body }}
-        GITHUB_TOKEN: ${{ inputs.github-token }}
       with:
         github-token: ${{ inputs.github-token }}
         script: |
-          const prNumber = parseInt(process.env.PR_NUMBER, 10);
-          const body = process.env.PR_BODY;
+          const prNumber = parseInt('${{ inputs.pr-number }}', 10);
+          const body = ${{ toJSON(inputs.pr-body) }};
           if (!prNumber || !body) {
             core.info('Skipping PR comment - missing PR number or body');
             return;
@@ -72,10 +68,7 @@ runs:
     - name: Send Slack notification
       if: always() && steps.delivery.outputs.send_slack == 'true'
       shell: bash
-      env:
-        SLACK_WEBHOOK: ${{ inputs.slack-webhook }}
-        SLACK_TEXT: ${{ inputs.slack-text }}
       run: |
         set -euo pipefail
-        PAYLOAD=$(jq -n --arg text "$SLACK_TEXT" '{text: $text}')
-        curl -fsS -X POST -H 'Content-type: application/json' --data "$PAYLOAD" "$SLACK_WEBHOOK"
+        PAYLOAD=$(jq -n --argjson text ${{ toJSON(inputs.slack-text) }} '{text: $text}')
+        curl -fsS -X POST -H 'Content-type: application/json' --data "$PAYLOAD" '${{ inputs.slack-webhook }}'

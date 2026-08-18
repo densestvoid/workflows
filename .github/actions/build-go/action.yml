@@ -37,12 +37,6 @@ runs:
 
     - name: Checkout Go sources
       uses: actions/checkout@v4
-      with:
-        sparse-checkout-cone-mode: false
-        sparse-checkout: |
-          go.mod
-          go.sum
-          **/*.go
 
     - name: Setup Go
       uses: actions/setup-go@v5
