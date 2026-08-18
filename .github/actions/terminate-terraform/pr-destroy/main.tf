@@ -1,11 +1,7 @@
 terraform {
   required_version = ">= 1.0"
 
-  backend "s3" {
-    bucket = "densestvoid-terraform"
-    key    = "pr/placeholder.tfstate"
-    region = "us-east-1"
-  }
+  backend "s3" {}
 
   required_providers {
     digitalocean = {

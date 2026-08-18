@@ -49,8 +49,25 @@ runs:
 
         MERGE_BASE=$(git merge-base HEAD "$BASE" 2>/dev/null || echo "$BASE")
 
+        shopt -s globstar nullglob
+        declare -A SEEN=()
+        MATCHED=()
+        for pat in "${PATTERNS[@]}"; do
+          pat="${pat#"${pat%%[![:space:]]*}"}"
+          pat="${pat%"${pat##*[![:space:]]}"}"
+          [ -z "$pat" ] && continue
+          for file in $pat; do
+            if [ -f "$file" ] && [ -z "${SEEN[$file]+x}" ]; then
+              MATCHED+=("$file")
+              SEEN[$file]=1
+            fi
+          done
+        done
+
         CHANGED=false
-        if git diff --quiet "$MERGE_BASE" HEAD -- "${PATTERNS[@]}"; then
+        if [ "${#MATCHED[@]}" -eq 0 ]; then
+          CHANGED=false
+        elif git diff --quiet "$MERGE_BASE" HEAD -- "${MATCHED[@]}"; then
           CHANGED=false
         else
           CHANGED=true
@@ -60,10 +77,13 @@ runs:
         trap 'rm -f "$HASH_INPUT"' EXIT
         : > "$HASH_INPUT"
 
-        while IFS= read -r -d '' file; do
-          printf '%s\0' "$file" >> "$HASH_INPUT"
-          cat "$file" >> "$HASH_INPUT"
-        done < <(git ls-files -z -- "${PATTERNS[@]}")
+        if [ "${#MATCHED[@]}" -gt 0 ]; then
+          mapfile -t SORTED < <(printf '%s\n' "${MATCHED[@]}" | sort -u)
+          for file in "${SORTED[@]}"; do
+            printf '%s\0' "$file" >> "$HASH_INPUT"
+            cat "$file" >> "$HASH_INPUT"
+          done
+        fi
 
         CONTENT_KEY=$(sha256sum "$HASH_INPUT" | awk '{print substr($1,1,16)}')
 

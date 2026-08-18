@@ -28,7 +28,7 @@ Pair with **detect-changes** in the caller repo to skip when Go sources are unch
 | [build-go](.github/actions/build-go) | One Go binary → artifact (`go list -deps` cache) |
 | [build-docker](.github/actions/build-docker) | One Docker image → artifact (BuildKit `type=gha` layer cache) |
 | [push-container](.github/actions/push-container) | Load image artifact; push to GHCR and/or Docker Hub |
-| [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`-var` flags) |
+| [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`variables-json` → `-var-file`) |
 | [terraform-output](.github/actions/terraform-output) | Read one Terraform output (same job, after deploy) |
 | [terminate-terraform](.github/actions/terminate-terraform) | Empty-module destroy + S3 state delete |
 | [notify](.github/actions/notify) | Slack + PR comment delivery |
@@ -119,9 +119,7 @@ jobs:
           terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
           terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
           terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
-          variables: |
-            deployment_id=pr-${{ github.event.pull_request.number }}
-            docker_image_tag=${{ steps.push.outputs.image-ref }}
+          variables-json: '{"deployment_id":"pr-${{ github.event.pull_request.number }}","docker_image_tag":"${{ steps.push.outputs.image-ref }}"}'
 
       - uses: densestvoid/workflows/.github/actions/terraform-output@main
         id: service-url
@@ -169,13 +167,14 @@ jobs:
 - uses: densestvoid/workflows/.github/actions/terminate-terraform@main
   with:
     backend-key: pr/pr-${{ github.event.pull_request.number }}.tfstate
+    terraform-s3-bucket: densestvoid-terraform
     do-token: ${{ secrets.DO_TOKEN }}
     terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
     terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
     terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 ```
 
-**terminate-terraform** uses a bundled empty destroy module at `${{ github.action_path }}/pr-destroy` — GitHub copies only the action directory onto the runner, so the module must live inside the action and versions with the action pin.
+**terminate-terraform** uses a bundled empty destroy module at `${{ github.action_path }}/pr-destroy` — GitHub copies only the action directory onto the runner, so the module must live inside the action and versions with the action pin. Pass `terraform-s3-bucket` to match the bucket declared in your app Terraform backend (same value deploy init uses).
 
 ## Caching
 
@@ -201,11 +200,15 @@ Every action that needs source code checks out the full repo itself. Callers sho
 
 ### push-container (GHCR)
 
-Requires `packages: write` and a token with `write:packages`. Use a PAT when `GITHUB_TOKEN` lacks package scope.
+Requires `packages: write` and a token with `write:packages`. Uses `docker/login-action` for registry auth. Use a PAT when `GITHUB_TOKEN` lacks package scope.
 
 ### Terraform
 
-**deploy-terraform** runs init + apply with `-var` flags (no tfvars writes, no `TF_VAR_*`). App Terraform modules must declare `backend "s3"` with bucket `densestvoid-terraform`; the action overrides `key` and `region` at init.
+**deploy-terraform** writes a temp `ci.auto.tfvars.json` from `variables-json` and applies with `-var-file`. `do-token` is merged into the JSON automatically. App Terraform modules must declare `backend "s3"` with bucket and partial config; the action overrides `key` and `region` at init.
+
+**terminate-terraform** uses a partial S3 backend in `pr-destroy` — pass `terraform-s3-bucket`, `backend-key`, and `terraform-aws-region` at init (same bucket your deploy module declares).
+
+Terraform CLI version is resolved by `hashicorp/setup-terraform` (latest release, not pinned).
 
 Read outputs in the same job:
 
@@ -230,12 +233,7 @@ Call once per output. Or run `terraform output -raw <name>` directly — `setup-
 | Area | Limitation |
 |------|------------|
 | **build-go** | `CGO_ENABLED=0` hardcoded — cgo packages won't build |
-| **deploy/terminate `variables`** | Naive `KEY=value` parsing — values with spaces, quotes, or `=` break |
-| **detect-changes** | `**` globs passed to `git diff`/`git ls-files` may not match all files you expect |
-| **detect-changes `content-key`** | Only hashes git-tracked files matching `paths` |
 | **build-docker** | `gh run download` only works within the same workflow run |
-| **push-container** | Registry credentials interpolated into shell — special characters in secrets can break login |
-| **Constants** | Terraform `1.5.7`, S3 bucket `densestvoid-terraform` hardcoded |
 | **Testing** | No integration tests in this repo — validate via krogerrecipeshopper rollout |
 
 ## Rollout
@@ -265,8 +263,3 @@ Call once per output. Or run `terraform output -raw <name>` directly — `setup-
 │   │   └── pr-destroy/          # bundled empty destroy module
 │   └── notify/
 ```
-
-## Internal constants
-
-- Terraform version: `1.5.7`
-- S3 state bucket: `densestvoid-terraform`

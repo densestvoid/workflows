@@ -56,14 +56,60 @@ runs:
         name: ${{ inputs.image-artifact }}
         path: ${{ runner.temp }}/push-container
 
-    - name: Push to registries
+    - name: Resolve registries
+      id: registries
+      shell: bash
+      run: |
+        set -euo pipefail
+        configured=0
+
+        if [ -n "${{ inputs.ghcr-image }}" ] && [ -n "${{ inputs.ghcr-username }}" ] && [ -n "${{ inputs.ghcr-password }}" ]; then
+          echo "ghcr=true" >> "$GITHUB_OUTPUT"
+          if [[ "${{ inputs.ghcr-image }}" == ghcr.io/* ]]; then
+            echo "ghcr-ref=${{ inputs.ghcr-image }}:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "ghcr-ref=ghcr.io/${{ inputs.ghcr-image }}:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          fi
+          configured=$((configured + 1))
+        else
+          echo "ghcr=false" >> "$GITHUB_OUTPUT"
+        fi
+
+        if [ -n "${{ inputs.dockerhub-image }}" ] && [ -n "${{ inputs.dockerhub-username }}" ] && [ -n "${{ inputs.dockerhub-password }}" ]; then
+          echo "dockerhub=true" >> "$GITHUB_OUTPUT"
+          echo "dockerhub-ref=${{ inputs.dockerhub-image }}:${{ inputs.tag }}" >> "$GITHUB_OUTPUT"
+          configured=$((configured + 1))
+        else
+          echo "dockerhub=false" >> "$GITHUB_OUTPUT"
+        fi
+
+        if [ "$configured" -eq 0 ]; then
+          echo "No registries configured" >&2
+          exit 1
+        fi
+
+    - name: Login to GHCR
+      if: steps.registries.outputs.ghcr == 'true'
+      uses: docker/login-action@v3
+      with:
+        registry: ghcr.io
+        username: ${{ inputs.ghcr-username }}
+        password: ${{ inputs.ghcr-password }}
+
+    - name: Login to Docker Hub
+      if: steps.registries.outputs.dockerhub == 'true'
+      uses: docker/login-action@v3
+      with:
+        username: ${{ inputs.dockerhub-username }}
+        password: ${{ inputs.dockerhub-password }}
+
+    - name: Load and push
       id: push
       shell: bash
       run: |
         set -euo pipefail
 
         ARTIFACT_DIR="${{ runner.temp }}/push-container"
-        TAG="${{ inputs.tag }}"
         TAR_FILE=$(find "$ARTIFACT_DIR" -name '*.tar' -type f | head -1)
         if [ -z "$TAR_FILE" ]; then
           TAR_FILE="${ARTIFACT_DIR}/${{ inputs.image-artifact }}.tar"
@@ -85,36 +131,13 @@ runs:
           LOCAL_IMAGE="$IMAGE_ID"
         fi
 
-        configured=0
         failures=0
         primary_ref=""
 
-        push_registry() {
-          local image="$1"
-          local username="$2"
-          local password="$3"
-          local prefix="$4"
+        push_image() {
+          local ref="$1"
+          local prefix="$2"
 
-          if [ -z "$image" ] || [ -z "$username" ] || [ -z "$password" ]; then
-            return 0
-          fi
-
-          configured=$((configured + 1))
-          local ref
-          if [[ "$image" == ghcr.io/* ]]; then
-            ref="${image}:${TAG}"
-          elif [ "$prefix" = "ghcr" ]; then
-            ref="ghcr.io/${image}:${TAG}"
-          else
-            ref="${image}:${TAG}"
-          fi
-
-          local login_host="docker.io"
-          if [ "$prefix" = "ghcr" ]; then
-            login_host="ghcr.io"
-          fi
-
-          printf '%s' "$password" | docker login "$login_host" -u "$username" --password-stdin
           docker tag "$LOCAL_IMAGE" "$ref"
           if docker push "$ref"; then
             echo "${prefix}-pushed=true" >> "$GITHUB_OUTPUT"
@@ -126,12 +149,12 @@ runs:
           fi
         }
 
-        push_registry "${{ inputs.ghcr-image }}" "${{ inputs.ghcr-username }}" "${{ inputs.ghcr-password }}" ghcr
-        push_registry "${{ inputs.dockerhub-image }}" "${{ inputs.dockerhub-username }}" "${{ inputs.dockerhub-password }}" dockerhub
+        if [ "${{ steps.registries.outputs.ghcr }}" = "true" ]; then
+          push_image "${{ steps.registries.outputs.ghcr-ref }}" ghcr
+        fi
 
-        if [ "$configured" -eq 0 ]; then
-          echo "No registries configured" >&2
-          exit 1
+        if [ "${{ steps.registries.outputs.dockerhub }}" = "true" ]; then
+          push_image "${{ steps.registries.outputs.dockerhub-ref }}" dockerhub
         fi
 
         if [ "$failures" -gt 0 ]; then
