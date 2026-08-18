@@ -23,7 +23,7 @@ Pair with **detect-changes** in the caller repo to skip when Go sources are unch
 | Action | Purpose |
 |--------|---------|
 | [detect-changes](.github/actions/detect-changes) | Path diff + `content-key` for skip gates and image tags |
-| [build-go](.github/actions/build-go) | One Go binary → artifact (`go list -deps` cache) |
+| [build-go](.github/actions/build-go) | One Go binary → artifact (binary cache keyed by dep-tree source contents) |
 | [build-docker](.github/actions/build-docker) | One Docker image → artifact (BuildKit `type=gha` layer cache) |
 | [push-container](.github/actions/push-container) | Load image artifact; push to GHCR and/or Docker Hub |
 | [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`variables-json` → `-var-file`) |
@@ -178,7 +178,7 @@ jobs:
 
 | Action | Mechanism |
 |--------|-----------|
-| **build-go** | `actions/cache/restore` + `actions/cache/save` on binary at repo root; key from `go.mod`/`go.sum` + dep-tree sources |
+| **build-go** | `actions/cache/restore` + `actions/cache/save` on binary at repo root; key from bundled `cachekey` helper (`go/packages` dep tree: `go.mod`/`go.sum`, sources, `EmbedFiles`) + `GOOS`/`GOARCH`. `setup-go` separately caches module download (`go.sum`). |
 | **build-docker** | BuildKit `--cache-from` / `--cache-to type=gha` (`.dockerignore` applied natively) |
 | **install-go-tool** | `actions/cache` on `~/go/bin/<tool>` per package |
 

@@ -56,7 +56,6 @@ func collectFiles(mainPackage string) ([]string, error) {
 		Mode: packages.NeedName |
 			packages.NeedFiles |
 			packages.NeedEmbedFiles |
-			packages.NeedEmbedPatterns |
 			packages.NeedDeps |
 			packages.NeedModule,
 		Env: append(os.Environ(), "CGO_ENABLED=0"),
@@ -89,20 +88,8 @@ func collectFiles(mainPackage string) ([]string, error) {
 			}
 		}
 
-		for _, path := range pkg.GoFiles {
+		for _, path := range append(pkg.GoFiles, pkg.EmbedFiles...) {
 			fileSet[path] = struct{}{}
-		}
-		for _, path := range pkg.EmbedFiles {
-			fileSet[path] = struct{}{}
-		}
-		for _, pattern := range pkg.EmbedPatterns {
-			matched, err := filesForEmbedPattern(pkg.Dir, pattern)
-			if err != nil {
-				return nil, fmt.Errorf("%s: %w", pkg.PkgPath, err)
-			}
-			for _, path := range matched {
-				fileSet[path] = struct{}{}
-			}
 		}
 	}
 
