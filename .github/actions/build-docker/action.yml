@@ -20,7 +20,7 @@ inputs:
 outputs:
   artifact-name:
     description: 'Resolved image artifact name for push-container'
-    value: ${{ steps.build.outputs.artifact-name }}
+    value: ${{ env.ARTIFACT_NAME }}
 runs:
   using: 'composite'
   steps:
@@ -39,13 +39,10 @@ runs:
       uses: docker/setup-buildx-action@v4
 
     - name: Build and save image
-      id: build
       shell: bash
       run: |
         set -euo pipefail
-        name='${{ inputs.artifact-name }}'
-        [ -z "$name" ] && name=$(dirname '${{ inputs.dockerfile }}')
-        printf 'artifact-name=%s\n' "$name" >> "$GITHUB_OUTPUT"
+        name='${{ inputs.artifact-name }}'; [ -z "$name" ] && name=$(basename "$(cd "$(dirname '${{ inputs.dockerfile }}')" && pwd)"); printf 'ARTIFACT_NAME=%s\n' "$name" >> "$GITHUB_ENV"
 
         docker buildx build \
           --file "${{ inputs.dockerfile }}" \
@@ -62,6 +59,6 @@ runs:
     - name: Upload image artifact
       uses: actions/upload-artifact@v7
       with:
-        name: ${{ steps.build.outputs.artifact-name }}
-        path: ${{ format('{0}.tar', steps.build.outputs.artifact-name) }}
+        name: ${{ env.ARTIFACT_NAME }}
+        path: ${{ format('{0}.tar', env.ARTIFACT_NAME) }}
         if-no-files-found: error
