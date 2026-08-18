@@ -10,11 +10,11 @@ inputs:
     required: false
     default: 'Dockerfile'
   artifacts:
-    description: 'Multiline workflow artifact names to download into context-path before build'
+    description: 'Comma-separated workflow artifact names to download into context-path before build (e.g. budget,worker)'
     required: false
     default: ''
   artifact-name:
-    description: 'Optional image artifact name override (default derived from dockerfile)'
+    description: 'Image artifact name (default: dockerfile directory, or image when dockerfile is at repo root)'
     required: false
     default: ''
 outputs:
@@ -27,34 +27,11 @@ runs:
     - name: Checkout Docker context
       uses: actions/checkout@v7
 
-    - name: Resolve artifact pattern
-      id: artifact-pattern
-      if: ${{ inputs.artifacts != '' }}
-      shell: bash
-      env:
-        ARTIFACTS: ${{ inputs.artifacts }}
-      run: |
-        set -euo pipefail
-        pattern=$(printf '%s' "$ARTIFACTS" | jq -Rsc '
-          split("\n")
-          | map(gsub("\r"; ""))
-          | map(select(length > 0))
-          | if length == 0 then ""
-            elif length == 1 then .[0]
-            else "{\(. | join(","))}"
-            end
-        ' -r)
-        if [ -z "$pattern" ]; then
-          echo "No artifact names provided" >&2
-          exit 1
-        fi
-        echo "pattern=${pattern}" >> "$GITHUB_OUTPUT"
-
     - name: Download input artifacts
       if: ${{ inputs.artifacts != '' }}
       uses: actions/download-artifact@v8
       with:
-        pattern: ${{ steps.artifact-pattern.outputs.pattern }}
+        pattern: ${{ contains(inputs.artifacts, ',') && format('{{{0}}}', inputs.artifacts) || inputs.artifacts }}
         path: ${{ inputs.context-path }}
         merge-multiple: true
 
@@ -71,9 +48,11 @@ runs:
 
         ARTIFACT_NAME="$ARTIFACT_NAME_INPUT"
         if [ -z "$ARTIFACT_NAME" ]; then
-          ARTIFACT_NAME=$(basename "${{ inputs.dockerfile }}")
-          if [ "$ARTIFACT_NAME" = "Dockerfile" ]; then
+          dir=$(dirname "${{ inputs.dockerfile }}")
+          if [ "$dir" = "." ]; then
             ARTIFACT_NAME="image"
+          else
+            ARTIFACT_NAME="$dir"
           fi
         fi
         echo "artifact-name=${ARTIFACT_NAME}" >> "$GITHUB_OUTPUT"

@@ -226,7 +226,7 @@ Call once per output. Or run `terraform output -raw <name>` directly — `setup-
 
 ### build-docker artifacts
 
-`upload-artifact` stores files in GitHub's artifact service — they are not kept on disk for later steps. **build-docker** also runs a fresh checkout, which wipes the workspace. Pass prior artifact names via `artifacts` (multiline); the action downloads them with a single `actions/download-artifact` call using a glob pattern (`budget` or `{budget,worker}`).
+`upload-artifact` stores files in GitHub's artifact service — they are not kept on disk for later steps. **build-docker** also runs a fresh checkout, which wipes the workspace. Pass prior artifact names via `artifacts` as a comma-separated list (e.g. `budget,worker`). **build-docker** passes them to `actions/download-artifact` `pattern` — no custom download scripting.
 
 Split build and docker across jobs by downloading artifacts in the caller workflow between jobs.
 
