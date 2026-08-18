@@ -55,6 +55,74 @@ func TestSourcePathsIncludesModuleAndSources(t *testing.T) {
 	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nfunc main() {}\n")
 	writeFile(t, filepath.Join(dir, "helper.go"), "package main\n\nfunc helper() int { return 1 }\n")
 
+	chdir(t, dir)
+
+	paths, err := sourcePaths(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertBasenamesFound(t, paths, "go.mod", "main.go", "helper.go")
+}
+
+func TestSourcePathsIncludesEmbedPatterns(t *testing.T) {
+	dir := t.TempDir()
+
+	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/app\n\ngo 1.22\n")
+	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nimport _ \"embed\"\n\n//go:embed assets/*\nvar assets string\n\nfunc main() {}\n")
+	writeFile(t, filepath.Join(dir, "assets", "data.txt"), "payload\n")
+
+	chdir(t, dir)
+
+	paths, err := sourcePaths(".")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertBasenamesFound(t, paths, "go.mod", "main.go", "data.txt")
+}
+
+func TestExpandEmbedPatternRecursive(t *testing.T) {
+	dir := t.TempDir()
+	nested := filepath.Join(dir, "static", "nested")
+	if err := os.MkdirAll(nested, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(nested, "page.html"), "<html></html>\n")
+
+	matches, err := expandEmbedPattern(filepath.Join(dir, "static", "..."))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	assertBasenamesFound(t, matches, "page.html")
+}
+
+func assertBasenamesFound(t *testing.T, paths []string, want ...string) {
+	t.Helper()
+
+	found := make(map[string]bool, len(want))
+	for _, name := range want {
+		found[name] = false
+	}
+
+	for _, path := range paths {
+		base := filepath.Base(path)
+		if _, ok := found[base]; ok {
+			found[base] = true
+		}
+	}
+
+	for name, ok := range found {
+		if !ok {
+			t.Fatalf("expected %q in paths, got %v", name, paths)
+		}
+	}
+}
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+
 	originalWD, err := os.Getwd()
 	if err != nil {
 		t.Fatal(err)
@@ -65,36 +133,13 @@ func TestSourcePathsIncludesModuleAndSources(t *testing.T) {
 	if err := os.Chdir(dir); err != nil {
 		t.Fatal(err)
 	}
-
-	paths, err := sourcePaths(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	want := map[string]bool{
-		"go.mod":    false,
-		"main.go":   false,
-		"helper.go": false,
-	}
-	for _, path := range paths {
-		base := filepath.Base(path)
-		if _, ok := want[base]; ok {
-			want[base] = true
-		}
-		if path == "go.mod" {
-			want["go.mod"] = true
-		}
-	}
-
-	for path, found := range want {
-		if !found {
-			t.Fatalf("expected %q in source paths, got %v", path, paths)
-		}
-	}
 }
 
 func writeFile(t *testing.T, path, contents string) {
 	t.Helper()
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		t.Fatal(err)
+	}
 	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
 		t.Fatal(err)
 	}
