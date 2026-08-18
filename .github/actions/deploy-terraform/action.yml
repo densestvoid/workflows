@@ -1,8 +1,8 @@
 name: 'Deploy Terraform'
 description: >-
   Terraform init and apply. Caller variables-json is written to a temp
-  ci.auto.tfvars.json (-var-file); do-token is merged as do_token. S3 backend
-  credentials are passed via -backend-config at init (not Terraform variables).
+  ci.auto.tfvars.json (-var-file) in the apply step; do-token is merged as
+  do_token. S3 backend credentials are passed via -backend-config at init.
 inputs:
   terraform-dir:
     description: 'Path to Terraform root module in the caller repo'
@@ -28,7 +28,8 @@ inputs:
   variables-json:
     description: >-
       JSON object of Terraform module variables (e.g. {"deployment_id":"pr-42"}).
-      Written to a temp var-file; use {} when no extra variables are needed.
+      Written to a temp var-file at apply time; use {} when no extra variables
+      are needed.
     required: false
     default: '{}'
 runs:
@@ -41,34 +42,6 @@ runs:
       uses: hashicorp/setup-terraform@v4
       with:
         terraform_wrapper: false
-
-    - name: Prepare Terraform variables
-      shell: bash
-      run: |
-        set -euo pipefail
-
-        tfvars="${RUNNER_TEMP}/ci.auto.tfvars.json"
-        variables_json='${{ inputs.variables-json }}'
-        do_token='${{ inputs.do-token }}'
-
-        # Write variables-json to a temp var-file for terraform apply.
-        # Empty or {} yields a valid empty JSON object so -var-file always works.
-        # printf (not echo) writes the JSON as-is without interpreting escapes.
-        if [ -z "$variables_json" ] || [ "$variables_json" = "{}" ]; then
-          echo '{}' > "$tfvars"
-        else
-          printf '%s' "$variables_json" > "$tfvars"
-        fi
-        jq empty "$tfvars"
-
-        # Merge do-token into the var-file as do_token when provided.
-        # jq handles JSON escaping; write to .tmp then mv for an atomic update.
-        if [ -n "$do_token" ]; then
-          jq --arg token "$do_token" '. + {do_token: $token}' "$tfvars" > "${tfvars}.tmp"
-          mv "${tfvars}.tmp" "$tfvars"
-        fi
-
-        echo "TFVARS=${tfvars}" >> "$GITHUB_ENV"
 
     - name: Terraform init
       shell: bash
@@ -86,4 +59,26 @@ runs:
       working-directory: ${{ inputs.terraform-dir }}
       run: |
         set -euo pipefail
-        terraform apply -auto-approve -var-file="$TFVARS"
+
+        tfvars="${RUNNER_TEMP}/ci.auto.tfvars.json"
+        variables_json='${{ inputs.variables-json }}'
+        do_token='${{ inputs.do-token }}'
+
+        # Write variables-json to a temp var-file, then apply with -var-file.
+        # Empty or {} yields a valid empty JSON object so -var-file always works.
+        # printf (not echo) writes the JSON as-is without interpreting escapes.
+        if [ -z "$variables_json" ] || [ "$variables_json" = "{}" ]; then
+          echo '{}' > "$tfvars"
+        else
+          printf '%s' "$variables_json" > "$tfvars"
+        fi
+        jq empty "$tfvars"
+
+        # Merge do-token into the var-file as do_token when provided.
+        # jq handles JSON escaping; write to .tmp then mv for an atomic update.
+        if [ -n "$do_token" ]; then
+          jq --arg token "$do_token" '. + {do_token: $token}' "$tfvars" > "${tfvars}.tmp"
+          mv "${tfvars}.tmp" "$tfvars"
+        fi
+
+        terraform apply -auto-approve -var-file="$tfvars"
