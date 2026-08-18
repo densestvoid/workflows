@@ -35,12 +35,12 @@ func main() {
 }
 
 func fingerprint(mainPackage string) (string, error) {
-	files, patterns, err := collectInputs(mainPackage)
+	files, err := collectFiles(mainPackage)
 	if err != nil {
 		return "", err
 	}
 
-	sum, err := hashInputs(files, patterns)
+	sum, err := hashFiles(files)
 	if err != nil {
 		return "", err
 	}
@@ -48,16 +48,14 @@ func fingerprint(mainPackage string) (string, error) {
 	return hex.EncodeToString(sum), nil
 }
 
-func collectInputs(mainPackage string) ([]string, []string, error) {
+func collectFiles(mainPackage string) ([]string, error) {
 	fileSet := make(map[string]struct{})
-	patternSet := make(map[string]struct{})
 	seenModules := make(map[string]struct{})
 
 	cfg := &packages.Config{
 		Mode: packages.NeedName |
 			packages.NeedFiles |
 			packages.NeedEmbedFiles |
-			packages.NeedEmbedPatterns |
 			packages.NeedDeps |
 			packages.NeedModule,
 		Env: append(os.Environ(), "CGO_ENABLED=0"),
@@ -65,12 +63,12 @@ func collectInputs(mainPackage string) ([]string, []string, error) {
 
 	pkgs, err := packages.Load(cfg, mainPackage)
 	if err != nil {
-		return nil, nil, fmt.Errorf("load packages: %w", err)
+		return nil, fmt.Errorf("load packages: %w", err)
 	}
 
 	for _, pkg := range pkgs {
 		for _, loadErr := range pkg.Errors {
-			return nil, nil, fmt.Errorf("%s: %s", pkg.PkgPath, loadErr.Msg)
+			return nil, fmt.Errorf("%s: %s", pkg.PkgPath, loadErr.Msg)
 		}
 
 		// Module is nil for standard library packages (see packages.Package docs).
@@ -90,18 +88,14 @@ func collectInputs(mainPackage string) ([]string, []string, error) {
 			}
 		}
 
-		for _, path := range pkg.GoFiles {
+		// GoFiles: package sources. EmbedFiles: files matched by //go:embed,
+		// already resolved by go list via go/packages (NeedEmbedFiles).
+		for _, path := range append(pkg.GoFiles, pkg.EmbedFiles...) {
 			fileSet[path] = struct{}{}
-		}
-		for _, path := range pkg.EmbedFiles {
-			fileSet[path] = struct{}{}
-		}
-		for _, pattern := range pkg.EmbedPatterns {
-			patternSet[pattern] = struct{}{}
 		}
 	}
 
-	return sortedKeys(fileSet), sortedKeys(patternSet), nil
+	return sortedKeys(fileSet), nil
 }
 
 func sortedKeys(set map[string]struct{}) []string {
@@ -113,7 +107,7 @@ func sortedKeys(set map[string]struct{}) []string {
 	return keys
 }
 
-func hashInputs(files, patterns []string) ([]byte, error) {
+func hashFiles(files []string) ([]byte, error) {
 	hasher := sha256.New()
 
 	for _, path := range files {
@@ -121,26 +115,16 @@ func hashInputs(files, patterns []string) ([]byte, error) {
 			return nil, err
 		}
 	}
-	for _, pattern := range patterns {
-		if err := hashLiteral(hasher, pattern); err != nil {
-			return nil, err
-		}
-	}
 
 	return hasher.Sum(nil), nil
 }
 
-func hashLiteral(hasher hash.Hash, value string) error {
-	if _, err := io.WriteString(hasher, value); err != nil {
-		return fmt.Errorf("hash literal %q: %w", value, err)
-	}
-	_, err := hasher.Write([]byte{0})
-	return err
-}
-
 func hashFile(hasher hash.Hash, path string) error {
-	if err := hashLiteral(hasher, path); err != nil {
-		return err
+	if _, err := io.WriteString(hasher, path); err != nil {
+		return fmt.Errorf("hash path %s: %w", path, err)
+	}
+	if _, err := hasher.Write([]byte{0}); err != nil {
+		return fmt.Errorf("hash path %s: %w", path, err)
 	}
 
 	file, err := os.Open(path)

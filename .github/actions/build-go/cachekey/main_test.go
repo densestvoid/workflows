@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-func TestHashPathsStable(t *testing.T) {
+func TestHashFilesStable(t *testing.T) {
 	dir := t.TempDir()
 
 	first := filepath.Join(dir, "first.txt")
@@ -19,12 +19,12 @@ func TestHashPathsStable(t *testing.T) {
 	}
 
 	paths := []string{first, second}
-	firstHash, err := hashInputs(paths, nil)
+	firstHash, err := hashFiles(paths)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	secondHash, err := hashInputs(paths, nil)
+	secondHash, err := hashFiles(paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestHashPathsStable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changedHash, err := hashInputs(append(paths, changed), nil)
+	changedHash, err := hashFiles(append(paths, changed))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,7 +48,7 @@ func TestHashPathsStable(t *testing.T) {
 	}
 }
 
-func TestCollectInputsIncludesModuleSourcesAndEmbeds(t *testing.T) {
+func TestCollectFilesIncludesModuleSourcesAndEmbeds(t *testing.T) {
 	dir := t.TempDir()
 
 	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/app\n\ngo 1.22\n")
@@ -58,15 +58,12 @@ func TestCollectInputsIncludesModuleSourcesAndEmbeds(t *testing.T) {
 
 	chdir(t, dir)
 
-	files, patterns, err := collectInputs(".")
+	files, err := collectFiles(".")
 	if err != nil {
 		t.Fatal(err)
 	}
 
 	assertBasenamesFound(t, files, "go.mod", "main.go", "helper.go", "data.txt")
-	if len(patterns) == 0 {
-		t.Fatalf("expected embed patterns, got %v", patterns)
-	}
 }
 
 func assertBasenamesFound(t *testing.T, paths []string, want ...string) {
