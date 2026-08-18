@@ -24,10 +24,6 @@ inputs:
     description: 'Multiline KEY=value Terraform variables'
     required: false
     default: ''
-outputs:
-  outputs:
-    description: 'JSON object of all Terraform outputs'
-    value: ${{ steps.apply.outputs.outputs }}
 runs:
   using: 'composite'
   steps:
@@ -41,7 +37,6 @@ runs:
         terraform_wrapper: false
 
     - name: Init and apply
-      id: apply
       shell: bash
       env:
         AWS_ACCESS_KEY_ID: ${{ inputs.terraform-aws-access-key-id }}
@@ -67,11 +62,3 @@ runs:
           -backend-config="region=${{ inputs.terraform-aws-region }}"
 
         terraform apply -auto-approve "${VAR_ARGS[@]}"
-
-        OUTPUTS=$(terraform output -json)
-        DELIM="tfoutputs_$(od -An -tx1 -N16 /dev/urandom | tr -d ' \n')"
-        {
-          echo "outputs<<${DELIM}"
-          echo "$OUTPUTS"
-          echo "${DELIM}"
-        } >> "$GITHUB_OUTPUT"

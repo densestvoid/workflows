@@ -1,0 +1,34 @@
+name: 'Terraform Output'
+description: 'Read a single Terraform output after deploy-terraform in the same job'
+inputs:
+  terraform-dir:
+    description: 'Path to Terraform root module (must already be initialized)'
+    required: true
+  name:
+    description: 'Terraform output name'
+    required: true
+outputs:
+  value:
+    description: 'Raw output value'
+    value: ${{ steps.read.outputs.value }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_version: 1.5.7
+        terraform_wrapper: false
+
+    - name: Read output
+      id: read
+      shell: bash
+      run: |
+        set -euo pipefail
+        cd "${{ inputs.terraform-dir }}"
+        VALUE=$(terraform output -raw "${{ inputs.name }}")
+        {
+          echo "value<<__TF_OUTPUT_VALUE__"
+          echo "$VALUE"
+          echo "__TF_OUTPUT_VALUE__"
+        } >> "$GITHUB_OUTPUT"

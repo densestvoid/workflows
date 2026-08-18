@@ -11,10 +11,19 @@ inputs:
 runs:
   using: 'composite'
   steps:
+    - name: Resolve tool
+      id: tool
+      shell: bash
+      run: |
+        set -euo pipefail
+        TOOL_NAME=$(basename "${{ inputs.tool-package }}")
+        echo "name=${TOOL_NAME}" >> "$GITHUB_OUTPUT"
+        echo "path=${HOME}/go/bin/${TOOL_NAME}" >> "$GITHUB_OUTPUT"
+
     - name: Cache tool
       uses: actions/cache@v4
       with:
-        path: ~/go/bin
+        path: ${{ steps.tool.outputs.path }}
         key: install-go-tool-${{ inputs.tool-package }}-${{ inputs.tool-version }}-${{ runner.os }}
         restore-keys: |
           install-go-tool-${{ inputs.tool-package }}-${{ runner.os }}-
@@ -23,7 +32,8 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        TOOL_NAME=$(basename "${{ inputs.tool-package }}")
-        if [ ! -f "$HOME/go/bin/$TOOL_NAME" ]; then
-          go install "${{ inputs.tool-package }}@${{ inputs.tool-version }}"
+        TOOL_PATH="${{ steps.tool.outputs.path }}"
+        if [ ! -f "$TOOL_PATH" ]; then
+          mkdir -p "$(dirname "$TOOL_PATH")"
+          GOBIN="$(dirname "$TOOL_PATH")" go install "${{ inputs.tool-package }}@${{ inputs.tool-version }}"
         fi

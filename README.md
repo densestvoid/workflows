@@ -27,6 +27,7 @@ Pair with **detect-changes** in the caller repo to skip when Go sources are unch
 | [build-docker](.github/actions/build-docker) | One Docker image → artifact (cached) |
 | [push-container](.github/actions/push-container) | Load image artifact; push to GHCR and/or Docker Hub |
 | [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply |
+| [terraform-output](.github/actions/terraform-output) | Read one Terraform output (same job, after deploy) |
 | [terminate-terraform](.github/actions/terminate-terraform) | Empty-module destroy + S3 state delete |
 | [notify](.github/actions/notify) | Slack + PR comment delivery |
 | [setup-go](.github/actions/setup-go) | Checkout + Go toolchain |
@@ -37,12 +38,17 @@ Pin actions at the same ref (e.g. `@main` during v0, `@v1` when released):
 ```yaml
 - uses: densestvoid/workflows/.github/actions/build-go@main
   with:
-    content-key: ${{ steps.go-changes.outputs.content-key }}
+    hash-paths: |
+      **/*.go
+      go.mod
+      go.sum
     main-package: ./cmd/server
     artifact-name: budget   # optional; binary is written to repo root with this name
 ```
 
 ## Typical build pipeline
+
+Use the same globs for **detect-changes** `paths` (skip/tag) and build action `hash-paths` (cache keys):
 
 ```yaml
 steps:
@@ -59,13 +65,21 @@ steps:
     id: build-go
     if: steps.deploy-changes.outputs.changed == 'true'
     with:
-      content-key: ${{ steps.deploy-changes.outputs.content-key }}
+      hash-paths: |
+        **/*.go
+        go.mod
+        go.sum
       main-package: ./cmd/server
 
   - uses: densestvoid/workflows/.github/actions/build-docker@main
     id: docker
     if: steps.deploy-changes.outputs.changed == 'true'
     with:
+      hash-paths: |
+        **/*.go
+        go.mod
+        go.sum
+        Dockerfile
       artifacts: ${{ steps.build-go.outputs.artifact-name }}
       dockerfile: Dockerfile
 
@@ -81,6 +95,18 @@ steps:
       dockerhub-image: myuser/my-app
       dockerhub-username: ${{ secrets.DOCKERHUB_USERNAME }}
       dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+  - uses: densestvoid/workflows/.github/actions/deploy-terraform@main
+    with:
+      terraform-dir: terraform
+      backend-key: pr/my-app.tfstate
+      # ...
+
+  - uses: densestvoid/workflows/.github/actions/terraform-output@main
+    id: tf-url
+    with:
+      terraform-dir: terraform
+      name: service_url
 ```
 
 ## Caller permissions
@@ -104,15 +130,18 @@ steps:
 
 Use a PAT instead of `GITHUB_TOKEN` when pushing to GHCR from a different repo or when org policy restricts default token package scopes.
 
-### deploy-terraform outputs
+### Terraform outputs
 
-The action exposes all Terraform outputs as a single JSON string in `outputs`. Parse in the caller workflow:
+**deploy-terraform** does init + apply only. Read outputs in the same job with **terraform-output** (one output per step) or `terraform output` directly:
 
 ```yaml
-- uses: densestvoid/workflows/.github/actions/deploy-terraform@main
-  id: deploy
+- uses: densestvoid/workflows/.github/actions/terraform-output@main
+  id: url
+  with:
+    terraform-dir: terraform
+    name: service_url
 
-- run: echo "url=$(jq -r '.service_url.value' <<< '${{ steps.deploy.outputs.outputs }}')"
+- run: echo "Deployed to ${{ steps.url.outputs.value }}"
 ```
 
 ## Repository structure
@@ -128,6 +157,7 @@ The action exposes all Terraform outputs as a single JSON string in `outputs`. P
 │   ├── build-docker/
 │   ├── push-container/
 │   ├── deploy-terraform/
+│   ├── terraform-output/
 │   ├── terminate-terraform/
 │   │   └── pr-destroy/          # bundled empty destroy module
 │   └── notify/

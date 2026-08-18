@@ -84,9 +84,9 @@ Established by `install-go-tool/` — cacheable actions use `actions/cache` **in
 
 | Action | Cache key |
 |--------|-----------|
-| **build-go** | `content-key` (from detect-changes) + `main-package` |
-| **build-docker** | Internal hash of dockerfile + context + input artifacts + `dockerfile` |
-| **install-go-tool** | `tool-package` + `tool-version` |
+| **build-go** | Caller `hash-paths` globs + `main-package` + `artifact-name` |
+| **build-docker** | Caller `hash-paths` globs + `dockerfile` + input artifact file contents |
+| **install-go-tool** | `tool-package` + `tool-version` (cached at `~/go/bin/<tool>`) |
 
 ---
 
@@ -104,7 +104,7 @@ Generalized change detection for **any** path set — not language-specific. Cal
 | Output | Purpose |
 |--------|---------|
 | `changed` | `true` when any matched path changed vs base |
-| `content-key` | Content hash of matched paths (for **build-go** cache and caller-driven skip/`tag` decisions) |
+| `content-key` | Content hash of matched paths (for caller-driven skip/`tag` decisions) |
 
 **Checkout:** Full repo (`fetch-depth: 0` for merge-base). Own checkout; caller does not pre-checkout.
 
@@ -141,7 +141,7 @@ Examples:
 | Input | Purpose |
 |-------|---------|
 | `working-directory` | Go module root |
-| `content-key` | From **detect-changes** (or caller) |
+| `hash-paths` | Multiline glob patterns for cache key (same style as **detect-changes** `paths`) |
 | `main-package` | Package path to build (e.g. `./cmd/server`) |
 | `artifact-name` | Optional. Artifact name and binary filename at **repo root** (e.g. `budget`, `server`). Default: basename of `main-package` |
 
@@ -155,6 +155,8 @@ Whether to call **build-go** at all (e.g. when sources unchanged) is a **caller 
 
 **Checkout:** Full repo.
 
+**Cache key:** Caller `hash-paths` — same glob style as **detect-changes** `paths`. Typically use identical globs for skip (`detect-changes`) and cache (`build-go`).
+
 ---
 
 ### Build Docker
@@ -163,7 +165,7 @@ Whether to call **build-go** at all (e.g. when sources unchanged) is a **caller 
 
 Mirrors **build-go**:
 
-1. Compute internal cache key (hash of dockerfile + git-tracked/untracked context files — excludes `.git`)
+1. Compute internal cache key from caller `hash-paths` + dockerfile + downloaded artifact files
 2. **`actions/cache`** — restore/save image tar (`docker save`) keyed on cache key + `dockerfile`
 3. On cache miss — `docker build` → `docker save` → save to cache
 4. **Upload artifact** — always, for downstream handoff (cross-job or push-container)
@@ -172,6 +174,7 @@ Mirrors **build-go**:
 |-------|---------|
 | `context` | Docker build context |
 | `dockerfile` | Dockerfile path |
+| `hash-paths` | Multiline glob patterns for cache key (same style as **detect-changes** `paths`) |
 | `artifacts` | Multiline list of artifact names to download (from **build-go** steps) |
 | `artifact-name` | Optional. Default: **basename of `dockerfile`** (e.g. `Dockerfile` → `image`, `Dockerfile.worker` → `Dockerfile.worker`) |
 
@@ -185,11 +188,13 @@ Whether to call **build-docker** is a **caller `if:`** decision. Cache restore i
 
 **Checkout:** Full repo.
 
+**Cache key:** Caller `hash-paths` (git-tracked files matching globs) + dockerfile content + downloaded artifact file contents.
+
 ---
 
 ### Push Container
 
-Load image artifact and push to **all configured** registries. Skip unset registries; **fail if any configured registry fails**. No manifest checks or cache logic — callers gate invocation via **detect-changes** / **build-docker** cache.
+Load image artifact and push to **all configured** registries. Skip unset registries; **fail if any configured registry fails**. No manifest checks or cache logic — callers gate invocation via **detect-changes** `changed`.
 
 | Input | Purpose |
 |-------|---------|
@@ -229,13 +234,9 @@ Infra secrets (`do-token`, `terraform-aws-s3-*`) are **action inputs** — calle
 | `terraform-aws-region` | S3 backend region |
 | `variables` | Multi-line `KEY=value` or JSON map of **non-secret** Terraform variables (app module schema) |
 
-| Output | Purpose |
-|--------|---------|
-| `outputs` | JSON string of all Terraform outputs (`terraform output -json`); parse with `jq` in caller |
+**Outputs:** None — read in the same job via **terraform-output** or `terraform output`.
 
 **Caller permissions (GHCR):** `packages: write` on the calling workflow; pass `GITHUB_TOKEN` or a PAT with `write:packages`.
-
-**Output wiring:** Composite actions cannot expose dynamic per-output keys — callers parse the JSON blob.
 
 **Domain / complex types:** CI passes scalars only. Structured values (e.g. `{ hostname, zone }`) are built in Terraform `locals` inside the app module — not in CI.
 
@@ -245,7 +246,22 @@ Infra secrets (`do-token`, `terraform-aws-s3-*`) are **action inputs** — calle
 
 Action inputs → `terraform apply -var key=value` flags. No tfvars file writes. S3 backend credentials remain as `AWS_*` env (backend config, not TF variables).
 
-**Not in this action:** image-exists / registry cache checks — **build-docker** internal cache and caller `if:` on **detect-changes** handle skip decisions.
+---
+
+### Terraform Output
+
+Read a single Terraform output in the same job after **deploy-terraform** (workspace and state already initialized).
+
+| Input | Purpose |
+|-------|---------|
+| `terraform-dir` | Path to Terraform root module |
+| `name` | Output name to read |
+
+| Output | Purpose |
+|--------|---------|
+| `value` | Raw output value (`terraform output -raw`) |
+
+Call once per output needed. Composite actions cannot expose dynamic `output.<name>` keys — one static output per invocation.
 
 ---
 
@@ -335,13 +351,21 @@ steps:
     id: build-go
     if: steps.go-changes.outputs.changed == 'true'
     with:
-      content-key: ${{ steps.go-changes.outputs.content-key }}
+      hash-paths: |
+        **/*.go
+        go.mod
+        go.sum
       main-package: ./cmd/server
 
   - uses: densestvoid/workflows/.github/actions/build-docker@v1
     id: docker
     if: steps.deploy-changes.outputs.changed == 'true'
     with:
+      hash-paths: |
+        **/*.go
+        go.mod
+        go.sum
+        Dockerfile
       dockerfile: Dockerfile
       artifacts: ${{ steps.build-go.outputs.artifact-name }}
 
