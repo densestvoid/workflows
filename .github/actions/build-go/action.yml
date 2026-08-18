@@ -36,7 +36,7 @@ runs:
         echo "main-package=${MAIN_PACKAGE}" >> "$GITHUB_OUTPUT"
 
     - name: Checkout Go sources
-      uses: actions/checkout@v4
+      uses: actions/checkout@v7
 
     - name: Setup Go
       uses: actions/setup-go@v5
@@ -69,7 +69,7 @@ runs:
         cp "$CACHE_BINARY" "${GITHUB_WORKSPACE}/${ARTIFACT_NAME}"
 
     - name: Upload binary artifact
-      uses: actions/upload-artifact@v4
+      uses: actions/upload-artifact@v7
       with:
         name: ${{ steps.meta.outputs.artifact-name }}
         path: ${{ steps.meta.outputs.artifact-name }}

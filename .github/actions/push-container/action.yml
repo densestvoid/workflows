@@ -51,7 +51,7 @@ runs:
   using: 'composite'
   steps:
     - name: Download image artifact
-      uses: actions/download-artifact@v4
+      uses: actions/download-artifact@v8
       with:
         name: ${{ inputs.image-artifact }}
         path: ${{ runner.temp }}/push-container

@@ -83,6 +83,38 @@ steps:
       dockerhub-password: ${{ secrets.DOCKERHUB_TOKEN }}
 ```
 
+## Caller permissions
+
+### push-container (GHCR)
+
+Calling workflows must grant package write access and pass a token with `write:packages`:
+
+```yaml
+permissions:
+  contents: read
+  packages: write
+
+steps:
+  - uses: densestvoid/workflows/.github/actions/push-container@main
+    with:
+      ghcr-image: ${{ github.repository }}/my-app
+      ghcr-username: ${{ github.actor }}
+      ghcr-password: ${{ secrets.GITHUB_TOKEN }}
+```
+
+Use a PAT instead of `GITHUB_TOKEN` when pushing to GHCR from a different repo or when org policy restricts default token package scopes.
+
+### deploy-terraform outputs
+
+The action exposes all Terraform outputs as a single JSON string in `outputs`. Parse in the caller workflow:
+
+```yaml
+- uses: densestvoid/workflows/.github/actions/deploy-terraform@main
+  id: deploy
+
+- run: echo "url=$(jq -r '.service_url.value' <<< '${{ steps.deploy.outputs.outputs }}')"
+```
+
 ## Repository structure
 
 ```

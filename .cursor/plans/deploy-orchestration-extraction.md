@@ -163,7 +163,7 @@ Whether to call **build-go** at all (e.g. when sources unchanged) is a **caller 
 
 Mirrors **build-go**:
 
-1. Compute internal cache key (hash of dockerfile + context + input artifacts)
+1. Compute internal cache key (hash of dockerfile + git-tracked/untracked context files — excludes `.git`)
 2. **`actions/cache`** — restore/save image tar (`docker save`) keyed on cache key + `dockerfile`
 3. On cache miss — `docker build` → `docker save` → save to cache
 4. **Upload artifact** — always, for downstream handoff (cross-job or push-container)
@@ -231,8 +231,11 @@ Infra secrets (`do-token`, `terraform-aws-s3-*`) are **action inputs** — calle
 
 | Output | Purpose |
 |--------|---------|
-| `outputs` | JSON object of **all** Terraform outputs (`terraform output -json`) |
-| Individual outputs | Also exposed as `output.<name>` for convenience (dynamic keys from module) |
+| `outputs` | JSON string of all Terraform outputs (`terraform output -json`); parse with `jq` in caller |
+
+**Caller permissions (GHCR):** `packages: write` on the calling workflow; pass `GITHUB_TOKEN` or a PAT with `write:packages`.
+
+**Output wiring:** Composite actions cannot expose dynamic per-output keys — callers parse the JSON blob.
 
 **Domain / complex types:** CI passes scalars only. Structured values (e.g. `{ hostname, zone }`) are built in Terraform `locals` inside the app module — not in CI.
 
