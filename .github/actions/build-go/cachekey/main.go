@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 
 	"golang.org/x/tools/go/packages"
@@ -40,7 +41,7 @@ func fingerprint(mainPackage string) (string, error) {
 		return "", err
 	}
 
-	sum, err := hashFiles(files)
+	sum, err := hashFingerprint(runtime.Version(), files)
 	if err != nil {
 		return "", err
 	}
@@ -105,8 +106,12 @@ func sortedKeys(set map[string]struct{}) []string {
 	return keys
 }
 
-func hashFiles(files []string) ([]byte, error) {
+func hashFingerprint(goVersion string, files []string) ([]byte, error) {
 	hasher := sha256.New()
+
+	if err := hashLiteral(hasher, goVersion); err != nil {
+		return nil, err
+	}
 
 	for _, path := range files {
 		if err := hashFile(hasher, path); err != nil {
@@ -115,6 +120,14 @@ func hashFiles(files []string) ([]byte, error) {
 	}
 
 	return hasher.Sum(nil), nil
+}
+
+func hashLiteral(hasher hash.Hash, value string) error {
+	if _, err := io.WriteString(hasher, value); err != nil {
+		return fmt.Errorf("hash literal: %w", err)
+	}
+	_, err := hasher.Write([]byte{0})
+	return err
 }
 
 func hashFile(hasher hash.Hash, path string) error {

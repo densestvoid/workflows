@@ -178,7 +178,7 @@ jobs:
 
 | Action | Mechanism |
 |--------|-----------|
-| **build-go** | `actions/cache/restore` + `actions/cache/save` on binary at repo root; key from bundled `cachekey` helper (`go/packages` dep tree: `go.mod`/`go.sum`, sources, `EmbedFiles`) + `GOOS`/`GOARCH`. `setup-go` separately caches module download (`go.sum`). |
+| **build-go** | `actions/cache/restore` + `actions/cache/save` on binary at repo root; key from bundled `cachekey` helper (`go/packages` dep tree: `go.mod`/`go.sum`, sources, `EmbedFiles`; active `go` toolchain version) + `GOOS`/`GOARCH`. `setup-go` separately caches module download (`go.sum`). |
 | **build-docker** | BuildKit `--cache-from` / `--cache-to type=gha` (`.dockerignore` applied natively) |
 | **install-go-tool** | `actions/cache` on `~/go/bin/<tool>` per package |
 

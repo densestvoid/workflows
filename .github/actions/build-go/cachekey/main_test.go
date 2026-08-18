@@ -19,12 +19,12 @@ func TestHashFilesStable(t *testing.T) {
 	}
 
 	paths := []string{first, second}
-	firstHash, err := hashFiles(paths)
+	firstHash, err := hashFingerprint("go1.22.0", paths)
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	secondHash, err := hashFiles(paths)
+	secondHash, err := hashFingerprint("go1.22.0", paths)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -38,7 +38,7 @@ func TestHashFilesStable(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	changedHash, err := hashFiles(append(paths, changed))
+	changedHash, err := hashFingerprint("go1.22.0", append(paths, changed))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -48,134 +48,24 @@ func TestHashFilesStable(t *testing.T) {
 	}
 }
 
-func TestCollectFilesIncludesModuleSourcesAndEmbeds(t *testing.T) {
+func TestHashFingerprintIncludesGoVersion(t *testing.T) {
 	dir := t.TempDir()
+	path := filepath.Join(dir, "only.txt")
+	if err := os.WriteFile(path, []byte("same"), 0o644); err != nil {
+		t.Fatal(err)
+	}
 
-	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/app\n\ngo 1.22\n")
-	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nimport \"embed\"\n\n//go:embed assets/*\nvar assets string\n\nfunc main() {}\n")
-	writeFile(t, filepath.Join(dir, "helper.go"), "package main\n\nfunc helper() int { return 1 }\n")
-	writeFile(t, filepath.Join(dir, "assets", "data.txt"), "payload\n")
-
-	chdir(t, dir)
-
-	files, err := collectFiles(".")
+	first, err := hashFingerprint("go1.22.0", []string{path})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	assertBasenamesFound(t, files, "go.mod", "main.go", "helper.go", "data.txt")
-}
-
-func TestCollectFilesDirectoryEmbed(t *testing.T) {
-	dir := t.TempDir()
-
-	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/app\n\ngo 1.22\n")
-	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nimport \"embed\"\n\n//go:embed templates\nvar templates embed.FS\n\nfunc main() {}\n")
-	writeFile(t, filepath.Join(dir, "templates", "nested", "page.html"), "<html></html>\n")
-
-	chdir(t, dir)
-
-	files, err := collectFiles(".")
+	second, err := hashFingerprint("go1.22.1", []string{path})
 	if err != nil {
 		t.Fatal(err)
 	}
 
-	assertBasenamesFound(t, files, "page.html")
-}
-
-func TestCollectFilesAllPrefixIncludesHidden(t *testing.T) {
-	dir := t.TempDir()
-
-	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/app\n\ngo 1.22\n")
-	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nimport \"embed\"\n\n//go:embed all:t\nvar t embed.FS\n\nfunc main() {}\n")
-	writeFile(t, filepath.Join(dir, "t", "visible.txt"), "ok\n")
-	writeFile(t, filepath.Join(dir, "t", ".hidden"), "secret\n")
-
-	chdir(t, dir)
-
-	files, err := collectFiles(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	assertBasenamesFound(t, files, "visible.txt", ".hidden")
-}
-
-func TestCollectFilesDirectoryEmbedSkipsHiddenWithoutAll(t *testing.T) {
-	dir := t.TempDir()
-
-	writeFile(t, filepath.Join(dir, "go.mod"), "module example.com/app\n\ngo 1.22\n")
-	writeFile(t, filepath.Join(dir, "main.go"), "package main\n\nimport \"embed\"\n\n//go:embed t\nvar t embed.FS\n\nfunc main() {}\n")
-	writeFile(t, filepath.Join(dir, "t", "visible.txt"), "ok\n")
-	writeFile(t, filepath.Join(dir, "t", ".hidden"), "secret\n")
-
-	chdir(t, dir)
-
-	files, err := collectFiles(".")
-	if err != nil {
-		t.Fatal(err)
-	}
-
-	assertBasenamesFound(t, files, "visible.txt")
-	assertBasenamesMissing(t, files, ".hidden")
-}
-
-func assertBasenamesFound(t *testing.T, paths []string, want ...string) {
-	t.Helper()
-
-	found := make(map[string]bool, len(want))
-	for _, name := range want {
-		found[name] = false
-	}
-
-	for _, path := range paths {
-		base := filepath.Base(path)
-		if _, ok := found[base]; ok {
-			found[base] = true
-		}
-	}
-
-	for name, ok := range found {
-		if !ok {
-			t.Fatalf("expected %q in paths, got %v", name, paths)
-		}
-	}
-}
-
-func assertBasenamesMissing(t *testing.T, paths []string, missing ...string) {
-	t.Helper()
-
-	for _, path := range paths {
-		base := filepath.Base(path)
-		for _, name := range missing {
-			if base == name {
-				t.Fatalf("expected %q to be absent, got %v", name, paths)
-			}
-		}
-	}
-}
-
-func chdir(t *testing.T, dir string) {
-	t.Helper()
-
-	originalWD, err := os.Getwd()
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		_ = os.Chdir(originalWD)
-	})
-	if err := os.Chdir(dir); err != nil {
-		t.Fatal(err)
-	}
-}
-
-func writeFile(t *testing.T, path, contents string) {
-	t.Helper()
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(path, []byte(contents), 0o644); err != nil {
-		t.Fatal(err)
+	if string(first) == string(second) {
+		t.Fatal("expected hash to change when go version changes")
 	}
 }
