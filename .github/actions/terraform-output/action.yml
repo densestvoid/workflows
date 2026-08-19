@@ -5,7 +5,7 @@ inputs:
     description: 'Path to Terraform root module (must already be initialized)'
     required: true
   name:
-    description: 'Terraform output name'
+    description: 'Terraform output name (single-line value, e.g. a URL)'
     required: true
 outputs:
   value:
@@ -26,9 +26,4 @@ runs:
       run: |
         set -euo pipefail
         value=$(terraform output -raw "${{ inputs.name }}")
-        # Multiline delimiter: plain value=... breaks when the output contains newlines.
-        {
-          echo "value<<__TF_OUTPUT_VALUE__"
-          echo "$value"
-          echo "__TF_OUTPUT_VALUE__"
-        } >> "$GITHUB_OUTPUT"
+        echo "value=$value" >> "$GITHUB_OUTPUT"
