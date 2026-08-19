@@ -21,7 +21,7 @@ over bespoke bash.
 | PR / GitHub API | `actions/github-script` | Raw `curl` + `GITHUB_TOKEN` |
 | Terraform CLI | `hashicorp/setup-terraform@v4` | Manual install / wget binary |
 | Checkout | `actions/checkout@v7` | Assumed pre-checked-out workspace |
-| Cache | `actions/cache/restore` + `actions/cache/save` | Custom cache dirs without actions/cache |
+| Cache | `actions/cache/restore` + `actions/cache/save` (@v6) | Custom cache dirs without actions/cache |
 | AWS credentials in a step | `env:` with secrets/inputs on that step, or `aws-actions/configure-aws-credentials` | Hardcoding keys |
 | Docker registry login | `docker/login-action` | `docker login` in bash |
 | Artifact upload/download | `actions/upload-artifact` / `actions/download-artifact` | Custom artifact storage |
@@ -43,7 +43,7 @@ Compose caller workflows from atomic actions (see root `README.md`):
 - `detect-changes` — path diff + content key; caller owns `if:` skip logic
 - `build-go`, `build-docker`, `push-container`
 - `deploy-terraform`, `terminate-terraform`, `terraform-output`
-- `notify` — Slack (text / inline payload / payload file) + PR comment
+- `notify` — Slack (`slack-payload` JSON) + PR comment
 - `setup-go`, `install-go-tool`, reusable `go-checks.yml`
 
 Callers pass secrets via `with:` for AWS/backend inputs and `env:` for `TF_VAR_*`.
@@ -55,7 +55,7 @@ Skip logic stays in the caller workflow, not inside build/deploy actions.
 2. **Split steps for clarity** — separate init, apply, delete state, etc. for log visibility.
 3. **Inputs over env for action API** — except `TF_VAR_*` and values callers already set on the invoking step.
 4. **Document non-obvious behavior** in `description` and README caller notes.
-5. **Pin major versions** on third-party actions (`@v4`, `@v7`) consistent with existing actions in this repo.
+5. **Pin major versions** on third-party actions (`@v6` cache, `@v7` checkout/setup-go, etc.) consistent with existing actions in this repo.
 
 ## When shell is acceptable
 

@@ -21,14 +21,14 @@ runs:
 
     - name: Setup Go (explicit version)
       if: ${{ inputs.go-version != '' }}
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v7
       with:
         go-version: ${{ inputs.go-version }}
         check-latest: true
 
     - name: Setup Go (from version file)
       if: ${{ inputs.go-version == '' }}
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v7
       with:
         go-version-file: >-
           ${{ inputs.go-version-file != '' && inputs.go-version-file

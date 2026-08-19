@@ -27,7 +27,7 @@ runs:
       uses: actions/checkout@v7
 
     - name: Setup Go
-      uses: actions/setup-go@v5
+      uses: actions/setup-go@v7
       with:
         go-version-file: go.mod
         cache-dependency-path: go.sum
@@ -49,7 +49,7 @@ runs:
 
     - name: Restore binary cache
       id: cache
-      uses: actions/cache/restore@v4
+      uses: actions/cache/restore@v6
       with:
         path: ${{ env.ARTIFACT_NAME }}
         key: build-go-${{ env.CACHE_KEY }}-${{ inputs.goos }}-${{ inputs.goarch }}
@@ -61,7 +61,7 @@ runs:
 
     - name: Save binary cache
       if: steps.cache.outputs.cache-hit != 'true'
-      uses: actions/cache/save@v4
+      uses: actions/cache/save@v6
       with:
         path: ${{ env.ARTIFACT_NAME }}
         key: build-go-${{ env.CACHE_KEY }}-${{ inputs.goos }}-${{ inputs.goarch }}

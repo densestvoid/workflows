@@ -26,7 +26,7 @@ runs:
   steps:
     - name: Comment on PR
       if: always() && inputs.pr-number != '' && inputs.pr-body != ''
-      uses: actions/github-script@v7
+      uses: actions/github-script@v9
       with:
         github-token: ${{ inputs.github-token }}
         script: |

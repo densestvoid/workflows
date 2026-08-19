@@ -132,7 +132,8 @@ jobs:
         if: always() && steps.deploy-changes.outputs.changed == 'true'
         with:
           slack-webhook: ${{ secrets.SLACK_WEBHOOK }}
-          slack-text: 'Deployed PR #${{ github.event.pull_request.number }}: ${{ steps.service-url.outputs.value }}'
+          slack-payload: |
+            {"text": "Deployed PR #${{ github.event.pull_request.number }}: ${{ steps.service-url.outputs.value }}"}
           pr-number: ${{ github.event.pull_request.number }}
           pr-body: 'Deployed to ${{ steps.service-url.outputs.value }}'
           github-token: ${{ secrets.GITHUB_TOKEN }}
@@ -246,13 +247,7 @@ Call once per output. Or run `terraform output -raw <name>` directly — `setup-
 
 ### notify (Slack)
 
-**notify** uses `slackapi/slack-github-action` (not `curl`). Three Slack modes, in priority order:
-
-1. **`slack-payload-file`** — path to JSON (budget pattern: build `slack-payload.json` in a prior step, download artifact, pass `slack-payload-file: slack-payload.json`)
-2. **`slack-payload`** — inline incoming-webhook JSON (`text`, `attachments`, `blocks`, …)
-3. **`slack-text`** — plain text (wrapped as `{"text":...}`)
-
-A file is only needed when the payload is produced in an earlier job/step — Slack does not require it; `slack-github-action` accepts inline `payload` too.
+**notify** uses `slackapi/slack-github-action` with inline **`slack-payload`** JSON (`text`, `attachments`, `blocks`, …). Callers build the payload in the workflow (simple `{"text":"..."}` or rich attachments like budget's terminate notifications).
 
 ### build-docker artifacts
 
