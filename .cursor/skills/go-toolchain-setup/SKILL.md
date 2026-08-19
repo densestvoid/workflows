@@ -14,20 +14,10 @@ Use when a workflow job needs Go but should not call the removed `setup-go` comp
 ## Standard pattern
 
 ```yaml
-- uses: actions/checkout@v7
+- name: Checkout
+  uses: actions/checkout@v7
 
-- name: Setup Go (explicit version)
-  if: ${{ inputs.go-version != '' }}
-  uses: actions/setup-go@v7
-  with:
-    go-version: ${{ inputs.go-version }}
-    check-latest: true
-    cache-dependency-path: >-
-      ${{ inputs.working-directory == '.' && 'go.sum'
-        || format('{0}/go.sum', inputs.working-directory) }}
-
-- name: Setup Go (from version file)
-  if: ${{ inputs.go-version == '' }}
+- name: Setup Go
   uses: actions/setup-go@v7
   with:
     go-version-file: >-
@@ -38,6 +28,8 @@ Use when a workflow job needs Go but should not call the removed `setup-go` comp
       ${{ inputs.working-directory == '.' && 'go.sum'
         || format('{0}/go.sum', inputs.working-directory) }}
 ```
+
+Resolve version from `go.mod` (or `go-version-file` / `working-directory` inputs). Do not add a separate explicit `go-version` override step.
 
 Replace `inputs.*` with literals when the job is not a reusable workflow.
 

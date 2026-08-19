@@ -6,11 +6,6 @@ name: Go Checks
 on:
   workflow_call:
     inputs:
-      go-version:
-        description: 'Explicit Go version (overrides go-version-file when set)'
-        required: false
-        type: string
-        default: ''
       go-version-file:
         description: 'Path to go.mod etc. (default: {working-directory}/go.mod)'
         required: false
@@ -34,20 +29,10 @@ jobs:
   Vet:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Setup Go (explicit version)
-        if: ${{ inputs.go-version != '' }}
-        uses: actions/setup-go@v7
-        with:
-          go-version: ${{ inputs.go-version }}
-          check-latest: true
-          cache-dependency-path: >-
-            ${{ inputs.working-directory == '.' && 'go.sum'
-              || format('{0}/go.sum', inputs.working-directory) }}
-
-      - name: Setup Go (from version file)
-        if: ${{ inputs.go-version == '' }}
+      - name: Setup Go
         uses: actions/setup-go@v7
         with:
           go-version-file: >-
@@ -65,20 +50,10 @@ jobs:
   Static-Analysis:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Setup Go (explicit version)
-        if: ${{ inputs.go-version != '' }}
-        uses: actions/setup-go@v7
-        with:
-          go-version: ${{ inputs.go-version }}
-          check-latest: true
-          cache-dependency-path: >-
-            ${{ inputs.working-directory == '.' && 'go.sum'
-              || format('{0}/go.sum', inputs.working-directory) }}
-
-      - name: Setup Go (from version file)
-        if: ${{ inputs.go-version == '' }}
+      - name: Setup Go
         uses: actions/setup-go@v7
         with:
           go-version-file: >-
@@ -101,20 +76,10 @@ jobs:
   Lint:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Setup Go (explicit version)
-        if: ${{ inputs.go-version != '' }}
-        uses: actions/setup-go@v7
-        with:
-          go-version: ${{ inputs.go-version }}
-          check-latest: true
-          cache-dependency-path: >-
-            ${{ inputs.working-directory == '.' && 'go.sum'
-              || format('{0}/go.sum', inputs.working-directory) }}
-
-      - name: Setup Go (from version file)
-        if: ${{ inputs.go-version == '' }}
+      - name: Setup Go
         uses: actions/setup-go@v7
         with:
           go-version-file: >-
@@ -133,20 +98,10 @@ jobs:
   Vulnerability-Check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Setup Go (explicit version)
-        if: ${{ inputs.go-version != '' }}
-        uses: actions/setup-go@v7
-        with:
-          go-version: ${{ inputs.go-version }}
-          check-latest: true
-          cache-dependency-path: >-
-            ${{ inputs.working-directory == '.' && 'go.sum'
-              || format('{0}/go.sum', inputs.working-directory) }}
-
-      - name: Setup Go (from version file)
-        if: ${{ inputs.go-version == '' }}
+      - name: Setup Go
         uses: actions/setup-go@v7
         with:
           go-version-file: >-
@@ -165,20 +120,10 @@ jobs:
   Security-Check:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v7
+      - name: Checkout
+        uses: actions/checkout@v7
 
-      - name: Setup Go (explicit version)
-        if: ${{ inputs.go-version != '' }}
-        uses: actions/setup-go@v7
-        with:
-          go-version: ${{ inputs.go-version }}
-          check-latest: true
-          cache-dependency-path: >-
-            ${{ inputs.working-directory == '.' && 'go.sum'
-              || format('{0}/go.sum', inputs.working-directory) }}
-
-      - name: Setup Go (from version file)
-        if: ${{ inputs.go-version == '' }}
+      - name: Setup Go
         uses: actions/setup-go@v7
         with:
           go-version-file: >-
