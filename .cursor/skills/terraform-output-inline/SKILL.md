@@ -12,7 +12,7 @@ The removed **terraform-output** action was a single `terraform output -raw` ste
 
 ## Pattern
 
-Run after **deploy-terraform** in the **same job** (Terraform state and `.terraform/` remain on disk):
+Run after **deploy-terraform** succeeds in the **same job**:
 
 ```yaml
 - uses: densestvoid/workflows/.github/actions/deploy-terraform@main
@@ -26,13 +26,9 @@ Run after **deploy-terraform** in the **same job** (Terraform state and `.terraf
     terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
     terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 
-- name: Setup Terraform
-  uses: hashicorp/setup-terraform@v4
-  with:
-    terraform_wrapper: false
-
 - name: Read service URL
   id: url
+  if: steps.deploy.outcome == 'success'
   working-directory: terraform/pr
   run: |
     set -euo pipefail
@@ -41,6 +37,8 @@ Run after **deploy-terraform** in the **same job** (Terraform state and `.terraf
 
 - run: echo "${{ steps.url.outputs.value }}"
 ```
+
+**deploy-terraform** runs `hashicorp/setup-terraform`, so the CLI stays on PATH for later steps in that job.
 
 ## Notes
 
