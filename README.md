@@ -211,7 +211,9 @@ Outputs:
 | `changed` | Caller `if:` skip gates (`steps.*.outputs.changed == 'true'`) |
 | `content-key` | Stable 16-char tag suffix for images (`pr-42-${{ steps.changes.outputs.content-key }}`) |
 
-**Community alternative:** [`dorny/paths-filter@v3`](https://github.com/dorny/paths-filter) is the de facto standard for path-based change detection (filter rules, per-filter outputs, PR/push event handling). Use it when you only need `changed` booleans — it does not hash file contents, so it cannot replace `content-key` for image tags or content-addressed cache keys. This action stays custom for the combined diff + content hash workflow.
+**vs workflow `paths` / `paths-ignore`:** [GitHub path filters](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore) decide whether the **workflow runs at all**. They do not expose step outputs, cannot skip individual steps inside a job, and do not run on `workflow_dispatch`. Use workflow `paths` when the entire workflow should be skipped; use **detect-changes** (or [`dorny/paths-filter`](https://github.com/dorny/paths-filter)) when the workflow must run but expensive steps should be gated with `if:`.
+
+**`content-key` vs path filters:** Path filters answer "did relevant files change?" — they do not hash contents. `content-key` is a separate concern: a short, content-addressed suffix for image tags (e.g. `pr-42-${{ steps.changes.outputs.content-key }}`) derived only from matched deploy paths at HEAD. `${{ github.sha }}` is the simpler alternative when every commit should produce a distinct tag; `content-key` stays stable across commits that do not touch deployable sources (docs-only pushes reuse the same tag). Drop `content-key` from callers if commit SHA tagging is sufficient.
 
 ### push-container (GHCR)
 

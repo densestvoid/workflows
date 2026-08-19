@@ -47,11 +47,11 @@ runs:
         elif git rev-parse --verify --quiet "${base_ref}" >/dev/null; then
           base="${base_ref}"
         else
-          echo "Base ref ${base_ref} not found — falling back to HEAD^" >&2
-          base="HEAD^"
+          echo "Base ref '${base_ref}' not found after fetch" >&2
+          exit 1
         fi
 
-        merge_base=$(git merge-base HEAD "${base}" 2>/dev/null || echo "${base}")
+        merge_base=$(git merge-base HEAD "${base}")
         echo "MERGE_BASE=${merge_base}" >> "$GITHUB_ENV"
         echo "Merge base: ${merge_base} (from ${base})"
 
