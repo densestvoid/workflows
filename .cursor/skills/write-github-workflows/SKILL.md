@@ -18,7 +18,7 @@ over bespoke bash.
 | Need | Use | Avoid |
 |------|-----|-------|
 | Path change detection (in-job skip) | `dorny/paths-filter@v3` | Custom git diff/bash; workflow trigger `paths` when a required check must still run |
-| Docker build + push | `densestvoid/workflows` **build-push-container** | Raw action chaining in callers; tar artifact round-trip |
+| Docker build + push | `densestvoid/workflows` **build-docker** | Raw action chaining in callers; tar artifact round-trip |
 | Go checkout + toolchain | `actions/checkout@v7` + `actions/setup-go@v7` | Removed `setup-go` composite — see **go-toolchain-setup** skill |
 | Go lint / vuln / security | Maintainer actions in **go-checks**; `install-go-tool` for staticcheck | Ad-hoc `go install` per job |
 | Terraform output (same job) | Inline `terraform output -raw` — see **terraform-output-inline** skill | Removed `terraform-output` composite |
@@ -33,7 +33,7 @@ over bespoke bash.
 ## This repo's toolbox actions
 
 - **build-go** — Go binary + dep-tree cache key (`cache-key` output for image tags)
-- **build-push-container** — Docker build/push via official actions; `image-built` for deploy gating
+- **build-docker** — Docker build/push via official actions; `image-built` for deploy gating
 - **deploy-terraform**, **terminate-terraform**
 - **notify** — Slack (`slack-payload`) + PR comment
 - **install-go-tool** — generic cached `go install`
@@ -49,13 +49,13 @@ over bespoke bash.
 ## Composite action conventions
 
 1. **One concern per action** — skip logic stays caller-owned.
-2. **Delegate to official actions inside composites** — e.g. build-push-container wraps setup-buildx, login, metadata, build-push.
+2. **Delegate to official actions inside composites** — e.g. build-docker wraps setup-buildx, login, metadata, build-push.
 3. **Split steps for log visibility.**
 4. **Document non-obvious behavior** in README caller notes.
 
 ## Review checklist
 
 - [ ] Path skip gates use `dorny/paths-filter`
-- [ ] Docker uses **build-push-container**, not raw buildx bash in callers
+- [ ] Docker uses **build-docker**, not raw buildx bash in callers
 - [ ] Go jobs use checkout + setup-go (not removed setup-go)
 - [ ] README example updated when action inputs change

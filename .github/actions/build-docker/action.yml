@@ -1,4 +1,4 @@
-name: 'Build Push Container'
+name: 'Build Docker'
 description: >-
   Build and push a Docker image via official Docker actions. Skips build when
   the tag already exists in the registry (imagetools inspect). Outputs image-ref

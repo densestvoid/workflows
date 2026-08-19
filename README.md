@@ -2,7 +2,7 @@
 
 Composable GitHub Actions toolbox for CI, build, deploy, and notify.
 
-**Toolbox, not orchestration.** This repo provides atomic, reusable actions. Each app repo owns workflow triggers, job graphs, `needs:` wiring, and which steps to call. Compose by repeating steps — one `build-go` per binary, one `build-push-container` per image.
+**Toolbox, not orchestration.** This repo provides atomic, reusable actions. Each app repo owns workflow triggers, job graphs, `needs:` wiring, and which steps to call. Compose by repeating steps — one `build-go` per binary, one `build-docker` per image.
 
 ## Workflows
 
@@ -23,7 +23,7 @@ Pair with [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in the c
 | Action | Purpose |
 |--------|---------|
 | [build-go](.github/actions/build-go) | One Go binary → artifact (dep-tree cache key; `cache-key` output for image tags) |
-| [build-push-container](.github/actions/build-push-container) | Build + push Docker image via official Docker actions; skips when tag exists (`image-built` output) |
+| [build-docker](.github/actions/build-docker) | Build + push Docker image via official Docker actions; skips when tag exists (`image-built` output) |
 | [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`TF_VAR_*` env on the invoking step) |
 | [terminate-terraform](.github/actions/terminate-terraform) | Empty destroy module + S3 state delete (`terraform-dir`, `TF_VAR_*` env) |
 | [notify](.github/actions/notify) | Slack (inline JSON payload) + PR comment |
@@ -56,15 +56,15 @@ Secrets live in **each app repo** (repository secrets/variables, or GitHub Envir
 |---------------------|---------|
 | `DO_TOKEN`, `TERRAFORM_AWS_*` | deploy/terminate terraform |
 | `SLACK_WEBHOOK` | notify |
-| `DOCKERHUB_*` | build-push-container |
-| `GITHUB_TOKEN` or PAT | build-push-container (GHCR), notify (PR comments) |
+| `DOCKERHUB_*` | build-docker |
+| `GITHUB_TOKEN` or PAT | build-docker (GHCR), notify (PR comments) |
 
 ## Typical PR deploy pipeline
 
 ```yaml
 permissions:
   contents: read
-  packages: write   # required for build-push-container → GHCR
+  packages: write   # required for build-docker → GHCR
 
 jobs:
   deploy:
@@ -92,7 +92,7 @@ jobs:
           main-package: ./cmd/server
           artifact-name: budget
 
-      - uses: densestvoid/workflows/.github/actions/build-push-container@main
+      - uses: densestvoid/workflows/.github/actions/build-docker@main
         id: docker
         if: steps.deploy-changes.outputs.deployable == 'true'
         with:
@@ -198,10 +198,10 @@ jobs:
 | Action | Mechanism |
 |--------|-----------|
 | **build-go** | `actions/cache/restore` + `actions/cache/save` on binary at repo root; key from bundled `cachekey` helper + `GOOS`/`GOARCH`. Exposes `cache-key` output for Docker tags. |
-| **build-push-container** | `docker/build-push-action` with `cache-from`/`cache-to type=gha`; skips build when tag exists in registry |
+| **build-docker** | `docker/build-push-action` with `cache-from`/`cache-to type=gha`; skips build when tag exists in registry |
 | **install-go-tool** | `actions/cache` on `~/go/bin/<tool>` per package |
 
-Skip logic is caller-owned: use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in workflow `if:` conditions. **build-push-container** exposes `image-built` when the registry already had the tag (skip container rollout; infra-only Terraform updates may still apply).
+Skip logic is caller-owned: use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in workflow `if:` conditions. **build-docker** exposes `image-built` when the registry already had the tag (skip container rollout; infra-only Terraform updates may still apply).
 
 ## Caller notes
 
@@ -230,10 +230,10 @@ Every action that needs source code checks out the full repo itself. Callers sho
 
 | Action | Checkout |
 |--------|----------|
-| build-go, build-push-container, deploy-terraform, terminate-terraform | Full repo |
+| build-go, build-docker, deploy-terraform, terminate-terraform | Full repo |
 | notify | None (uses github-script; optional checkout in caller) |
 
-### build-push-container
+### build-docker
 
 Wraps `docker/setup-buildx-action`, `docker/login-action`, `docker/metadata-action`, and `docker/build-push-action`. Requires `packages: write` for GHCR.
 
@@ -293,16 +293,16 @@ Read outputs in the same job after **deploy-terraform** (see `.cursor/skills/ter
 
 **notify** uses `slackapi/slack-github-action` with inline **`slack-payload`** JSON (`text`, `attachments`, `blocks`, …). Callers build the payload in the workflow (simple `{"text":"..."}` or rich attachments like budget's terminate notifications).
 
-### build-push-container artifacts input
+### build-docker artifacts input
 
-When **build-go** runs first, pass `artifacts: ${{ steps.build-go.outputs.artifact-name }}` so the Go binary is downloaded into the Docker context before build. **build-push-container** checks out fresh and uses `actions/download-artifact` internally.
+When **build-go** runs first, pass `artifacts: ${{ steps.build-go.outputs.artifact-name }}` so the Go binary is downloaded into the Docker context before build. **build-docker** checks out fresh and uses `actions/download-artifact` internally.
 
 ## Known limitations (v0)
 
 | Area | Limitation |
 |------|------------|
 | **build-go** | `CGO_ENABLED=0`; default `GOOS=linux` / `GOARCH=amd64` (override via inputs) — cgo packages won't build |
-| **build-push-container** | `actions/download-artifact` when `artifacts` is set; skips push when tag already in registry |
+| **build-docker** | `actions/download-artifact` when `artifacts` is set; skips push when tag already in registry |
 | **Testing** | No integration tests in this repo — validate via krogerrecipeshopper rollout |
 
 ## Rollout
@@ -323,7 +323,7 @@ When **build-go** runs first, pass `artifacts: ${{ steps.build-go.outputs.artifa
 │   ├── install-go-tool/
 │   ├── build-go/
 │   │   └── cachekey/            # bundled Go helper for dep-tree fingerprint
-│   ├── build-push-container/
+│   ├── build-docker/
 │   ├── deploy-terraform/
 │   ├── terminate-terraform/
 │   └── notify/
