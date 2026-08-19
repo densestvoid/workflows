@@ -17,15 +17,17 @@ over bespoke bash.
 
 | Need | Use | Avoid |
 |------|-----|-------|
+| Path change detection (in-job skip) | `dorny/paths-filter@v3` | Custom git diff/bash; workflow trigger `paths` when a required check must still run |
 | Slack incoming webhook | `slackapi/slack-github-action@v4.0.0` (`webhook-type: incoming-webhook`) | `curl` to webhook URL |
-| PR / GitHub API | `actions/github-script` | Raw `curl` + `GITHUB_TOKEN` |
-| Terraform CLI | `hashicorp/setup-terraform@v4` | Manual install / wget binary |
+| PR comment | `peter-evans/create-or-update-comment@v4` or `actions/github-script` | Raw `curl` + `GITHUB_TOKEN` |
+| Terraform init/apply/output | `hashicorp/setup-terraform@v4` + `dflook/terraform-*` or inline `terraform` | Ad-hoc install scripts |
+| Docker build + push | `docker/build-push-action@v6` + `docker/login-action@v4` | Custom `docker buildx` bash |
+| AWS credentials | `aws-actions/configure-aws-credentials@v4` | Passing raw keys in bash when avoidable |
 | Checkout | `actions/checkout@v7` | Assumed pre-checked-out workspace |
 | Cache | `actions/cache/restore` + `actions/cache/save` (@v6) | Custom cache dirs without actions/cache |
-| AWS credentials in a step | `env:` with secrets/inputs on that step, or `aws-actions/configure-aws-credentials` | Hardcoding keys |
-| Docker registry login | `docker/login-action` | `docker login` in bash |
 | Artifact upload/download | `actions/upload-artifact` / `actions/download-artifact` | Custom artifact storage |
-| Go toolchain | `actions/setup-go` or `densestvoid/workflows/.github/actions/setup-go` | Manual Go install |
+| Go toolchain | `actions/setup-go@v7` (optionally via `setup-go` wrapper) | Manual Go install |
+| Go lint / vuln / security | `golangci/golangci-lint-action`, `golangci/govulncheck-action`, `securego/gosec` | Ad-hoc `go install` per job unless `install-go-tool` is intentional |
 | Deploy / terminate Terraform | `densestvoid/workflows` `deploy-terraform` / `terminate-terraform` | Inline `terraform` + `aws` scripts in caller workflows |
 | Terraform variables | `TF_VAR_*` env on the step that uses the action | Custom tfvars files in the action unless unavoidable |
 | Working directory | `working-directory:` on `run` steps | `cd` in bash |
@@ -40,14 +42,14 @@ over bespoke bash.
 
 Compose caller workflows from atomic actions (see root `README.md`):
 
-- `detect-changes` — path diff + content key; caller owns `if:` skip logic
 - `build-go`, `build-docker`, `push-container`
 - `deploy-terraform`, `terminate-terraform`, `terraform-output`
 - `notify` — Slack (`slack-payload` JSON) + PR comment
 - `setup-go`, `install-go-tool`, reusable `go-checks.yml`
 
+**Skip logic** lives in the caller workflow via `dorny/paths-filter` (not a toolbox action).
+
 Callers pass secrets via `with:` for AWS/backend inputs and `env:` for `TF_VAR_*`.
-Skip logic stays in the caller workflow, not inside build/deploy actions.
 
 ## Composite action conventions
 
@@ -68,6 +70,7 @@ Skip logic stays in the caller workflow, not inside build/deploy actions.
 Before merging workflow or action changes:
 
 - [ ] No `curl` to GitHub, Slack, or Docker APIs where an official action exists
+- [ ] Path skip gates use `dorny/paths-filter`, not custom diff scripts
 - [ ] Secrets only in `secrets.*` or masked inputs — never logged
 - [ ] `if: always()` only where delivery must run after failure (e.g. notify)
 - [ ] Composite `outputs:` declared only for caller-facing values

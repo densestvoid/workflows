@@ -16,13 +16,12 @@ jobs:
     uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
 ```
 
-Pair with **detect-changes** in the caller repo to skip when Go sources are unchanged. For repos with multiple `go.mod` files, pass `working-directory` to **go-checks** — see [Go module layout](#go-module-layout).
+Pair with [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in the caller repo to skip jobs when sources are unchanged — see [Path filters](#path-filters). For repos with multiple `go.mod` files, pass `working-directory` to **go-checks** — see [Go module layout](#go-module-layout).
 
 ## Actions
 
 | Action | Purpose |
 |--------|---------|
-| [detect-changes](.github/actions/detect-changes) | Path diff + `content-key` for skip gates and image tags |
 | [build-go](.github/actions/build-go) | One Go binary → artifact (binary cache keyed by dep-tree source contents) |
 | [build-docker](.github/actions/build-docker) | One Docker image → artifact (BuildKit `type=gha` layer cache) |
 | [push-container](.github/actions/push-container) | Load image artifact; push to GHCR and/or Docker Hub |
@@ -74,42 +73,47 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     steps:
-      - uses: densestvoid/workflows/.github/actions/detect-changes@main
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@v3
         id: deploy-changes
         with:
-          paths: |
-            **/*.go
-            go.mod
-            go.sum
-            Dockerfile
-            terraform/**
+          filters: |
+            deployable:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
+              - 'Dockerfile'
+              - 'terraform/**'
 
       - uses: densestvoid/workflows/.github/actions/build-go@main
         id: build-go
-        if: steps.deploy-changes.outputs.changed == 'true'
+        if: steps.deploy-changes.outputs.deployable == 'true'
         with:
           main-package: ./cmd/server
           artifact-name: budget
 
       - uses: densestvoid/workflows/.github/actions/build-docker@main
         id: docker
-        if: steps.deploy-changes.outputs.changed == 'true'
+        if: steps.deploy-changes.outputs.deployable == 'true'
         with:
           dockerfile: Dockerfile
           artifacts: ${{ steps.build-go.outputs.artifact-name }}
 
       - uses: densestvoid/workflows/.github/actions/push-container@main
         id: push
-        if: steps.deploy-changes.outputs.changed == 'true'
+        if: steps.deploy-changes.outputs.deployable == 'true'
         with:
           image-artifact: ${{ steps.docker.outputs.artifact-name }}
-          tag: pr-${{ github.event.pull_request.number }}-${{ steps.deploy-changes.outputs.content-key }}
+          tag: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
           ghcr-image: ${{ github.repository }}/my-app
           ghcr-username: ${{ github.actor }}
           ghcr-password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: densestvoid/workflows/.github/actions/deploy-terraform@main
-        if: steps.deploy-changes.outputs.changed == 'true'
+        if: steps.deploy-changes.outputs.deployable == 'true'
         env:
           TF_VAR_deployment_id: pr-${{ github.event.pull_request.number }}
           TF_VAR_docker_image_tag: ${{ steps.push.outputs.image-ref }}
@@ -123,13 +127,13 @@ jobs:
 
       - uses: densestvoid/workflows/.github/actions/terraform-output@main
         id: service-url
-        if: steps.deploy-changes.outputs.changed == 'true'
+        if: steps.deploy-changes.outputs.deployable == 'true'
         with:
           terraform-dir: terraform/pr
           name: service_url
 
       - uses: densestvoid/workflows/.github/actions/notify@main
-        if: always() && steps.deploy-changes.outputs.changed == 'true'
+        if: always() && steps.deploy-changes.outputs.deployable == 'true'
         with:
           slack-webhook: ${{ secrets.SLACK_WEBHOOK }}
           slack-payload: |
@@ -141,25 +145,42 @@ jobs:
 
 ### CI skip (Go Checks)
 
+Use in-job path filters — not workflow trigger `paths` — so a required aggregation job (e.g. `ci`) can still run on docs-only PRs.
+
 ```yaml
 jobs:
   changes:
     runs-on: ubuntu-latest
     outputs:
-      changed: ${{ steps.go-changes.outputs.changed }}
+      go: ${{ steps.filter.outputs.go }}
     steps:
-      - uses: densestvoid/workflows/.github/actions/detect-changes@main
-        id: go-changes
+      - uses: actions/checkout@v7
         with:
-          paths: |
-            **/*.go
-            go.mod
-            go.sum
+          fetch-depth: 0
+
+      - uses: dorny/paths-filter@v3
+        id: filter
+        with:
+          filters: |
+            go:
+              - '**/*.go'
+              - 'go.mod'
+              - 'go.sum'
 
   go-checks:
     needs: changes
-    if: needs.changes.outputs.changed == 'true'
+    if: needs.changes.outputs.go == 'true'
     uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
+
+  ci:
+    needs: [changes, go-checks]
+    if: >-
+      always() &&
+      needs.changes.result == 'success' &&
+      (needs.go-checks.result == 'success' || needs.go-checks.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "CI passed"
 ```
 
 ### PR terminate
@@ -187,9 +208,54 @@ jobs:
 | **build-docker** | BuildKit `--cache-from` / `--cache-to type=gha` (`.dockerignore` applied natively) |
 | **install-go-tool** | `actions/cache` on `~/go/bin/<tool>` per package |
 
-Skip logic is caller-owned: use **detect-changes** `changed` in workflow `if:` conditions. Build actions do not expose cache-hit outputs.
+Skip logic is caller-owned: use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in workflow `if:` conditions. Build actions do not expose cache-hit outputs.
+
+## Community action alternatives
+
+Prefer maintained third-party actions in app repos where they replace custom bash. This toolbox keeps thin composites only where composition or conventions add value.
+
+| Need | Recommended | Keep toolbox action when… |
+|------|-------------|---------------------------|
+| **Path change detection** | [`dorny/paths-filter@v3`](https://github.com/dorny/paths-filter) | N/A — use community action directly in callers |
+| **Go checkout + toolchain** | [`actions/checkout@v7`](https://github.com/actions/checkout) + [`actions/setup-go@v7`](https://github.com/actions/setup-go) | `setup-go` adds `working-directory` / version-file defaults for `go-checks` |
+| **Go lint** | [`golangci/golangci-lint-action@v6`](https://github.com/golangci/golangci-lint-action) | `go-checks` runs linters in parallel jobs via `install-go-tool` |
+| **Go vuln scan** | [`golangci/govulncheck-action`](https://github.com/golangci/govulncheck-action) | Same — or keep `install-go-tool` + `govulncheck` for one pin |
+| **Go security** | [`securego/gosec@master`](https://github.com/securego/gosec) | Same |
+| **Install Go CLI tool** | Tool-specific actions above, or `go install` + `actions/cache` | `install-go-tool` for generic cached `go install` |
+| **Go binary build + cache** | No drop-in — dep-tree fingerprint is custom | **`build-go`** (`cachekey` helper) |
+| **Docker build** | [`docker/build-push-action@v6`](https://github.com/docker/build-push-action) + [`docker/setup-buildx-action@v4`](https://github.com/docker/setup-buildx-action) | **`build-docker`** when you need image-as-artifact between jobs |
+| **Docker push + tags** | `docker/build-push-action` with `push: true` + [`docker/metadata-action@v5`](https://github.com/docker/metadata-action) | **`push-container`** when build and push are separate jobs |
+| **Terraform init/apply** | [`hashicorp/setup-terraform@v4`](https://github.com/hashicorp/setup-terraform) + [`dflook/terraform-apply@v2`](https://github.com/dflook/terraform-github-actions) | **`deploy-terraform`** for S3 `-backend-config` + `TF_VAR_*` convention |
+| **Terraform destroy + state delete** | `dflook/terraform-apply` (destroy module) + `aws s3 rm` | **`terminate-terraform`** bundles init → apply → S3 cleanup |
+| **Terraform output** | `terraform output -raw` after `setup-terraform`, or [`dflook/terraform-output@v4`](https://github.com/dflook/terraform-github-actions) | **`terraform-output`** for a single named output step |
+| **AWS credentials** | [`aws-actions/configure-aws-credentials@v4`](https://github.com/aws-actions/configure-aws-credentials) | Pass keys via action inputs when using partial S3 backend config only at init |
+| **Slack webhook** | [`slackapi/slack-github-action@v4`](https://github.com/slackapi/slack-github-action) | **`notify`** pairs Slack + PR comment |
+| **PR comment** | [`peter-evans/create-or-update-comment@v4`](https://github.com/peter-evans/create-or-update-comment) or `actions/github-script` | **`notify`** when Slack and PR comment ship together |
+
+**Workflow trigger `paths`:** [GitHub path filters](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore) skip the entire workflow. Do **not** use for CI when branch protection requires a check to run on every PR (e.g. budget's `ci` aggregation job). Use `paths-filter` in-job instead.
+
+**Image tags:** Use `${{ github.sha }}` for one tag per commit, or content-addressed tags from **build-go**'s internal cache key at deploy time (budget's `pr-N-<docker_hash>` pattern). Path filters do not produce content hashes.
 
 ## Caller notes
+
+### Path filters
+
+Use [`dorny/paths-filter@v3`](https://github.com/dorny/paths-filter) after `actions/checkout` with `fetch-depth: 0`.
+
+```yaml
+- uses: dorny/paths-filter@v3
+  id: filter
+  with:
+    base: main   # optional; defaults suit PR/push events
+    filters: |
+      deployable:
+        - '**/*.go'
+        - 'terraform/**'
+```
+
+Gate downstream steps with `if: steps.filter.outputs.deployable == 'true'`. For `workflow_run` triggers (budget deploy-after-CI), checkout the head SHA first, then run `paths-filter` with `base: main`.
+
+Named filters (`go`, `deployable`, …) let one step drive multiple `if:` conditions.
 
 ### Checkout
 
@@ -197,23 +263,8 @@ Every action that needs source code checks out the full repo itself. Callers sho
 
 | Action | Checkout |
 |--------|----------|
-| detect-changes, build-go, build-docker, deploy-terraform, terminate-terraform, setup-go | Full repo |
+| build-go, build-docker, deploy-terraform, terminate-terraform, setup-go | Full repo |
 | push-container, notify, terraform-output | None (artifacts / existing workspace) |
-
-### detect-changes
-
-**Steps:** full checkout → fetch base ref → resolve merge-base → expand path globs at HEAD → `git diff` vs merge-base → SHA-256 content hash of matched files (`content-key`).
-
-Outputs:
-
-| Output | Use |
-|--------|-----|
-| `changed` | Caller `if:` skip gates (`steps.*.outputs.changed == 'true'`) |
-| `content-key` | Stable 16-char tag suffix for images (`pr-42-${{ steps.changes.outputs.content-key }}`) |
-
-**vs workflow `paths` / `paths-ignore`:** [GitHub path filters](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore) decide whether the **workflow runs at all**. They do not expose step outputs, cannot skip individual steps inside a job, and do not run on `workflow_dispatch`. Use workflow `paths` when the entire workflow should be skipped; use **detect-changes** (or [`dorny/paths-filter`](https://github.com/dorny/paths-filter)) when the workflow must run but expensive steps should be gated with `if:`.
-
-**`content-key` vs path filters:** Path filters answer "did relevant files change?" — they do not hash contents. `content-key` is a separate concern: a short, content-addressed suffix for image tags (e.g. `pr-42-${{ steps.changes.outputs.content-key }}`) derived only from matched deploy paths at HEAD. `${{ github.sha }}` is the simpler alternative when every commit should produce a distinct tag; `content-key` stays stable across commits that do not touch deployable sources (docs-only pushes reuse the same tag). Drop `content-key` from callers if commit SHA tagging is sufficient.
 
 ### push-container (GHCR)
 
@@ -295,7 +346,6 @@ Split build and docker across jobs by downloading artifacts in the caller workfl
 ├── actions/
 │   ├── setup-go/
 │   ├── install-go-tool/
-│   ├── detect-changes/
 │   ├── build-go/
 │   │   └── cachekey/            # bundled Go helper for dep-tree fingerprint
 │   ├── build-docker/
