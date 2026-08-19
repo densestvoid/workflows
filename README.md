@@ -29,7 +29,7 @@ Pair with **detect-changes** in the caller repo to skip when Go sources are unch
 | [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`TF_VAR_*` env on the invoking step) |
 | [terraform-output](.github/actions/terraform-output) | Read one Terraform output (same job, after deploy) |
 | [terminate-terraform](.github/actions/terminate-terraform) | Empty destroy module + S3 state delete (`terraform-dir`, `TF_VAR_*` env) |
-| [notify](.github/actions/notify) | Slack + PR comment delivery |
+| [notify](.github/actions/notify) | Slack (text, inline JSON payload, or payload file) + PR comment |
 | [setup-go](.github/actions/setup-go) | Checkout + Go toolchain |
 | [install-go-tool](.github/actions/install-go-tool) | Install + cache a Go CLI tool (`~/go/bin/<tool>`) |
 
@@ -243,6 +243,16 @@ Read outputs in the same job:
 ```
 
 Call once per output. Or run `terraform output -raw <name>` directly — `setup-terraform` leaves the CLI on PATH for the job.
+
+### notify (Slack)
+
+**notify** uses `slackapi/slack-github-action` (not `curl`). Three Slack modes, in priority order:
+
+1. **`slack-payload-file`** — path to JSON (budget pattern: build `slack-payload.json` in a prior step, download artifact, pass `slack-payload-file: slack-payload.json`)
+2. **`slack-payload`** — inline incoming-webhook JSON (`text`, `attachments`, `blocks`, …)
+3. **`slack-text`** — plain text (wrapped as `{"text":...}`)
+
+A file is only needed when the payload is produced in an earlier job/step — Slack does not require it; `slack-github-action` accepts inline `payload` too.
 
 ### build-docker artifacts
 
