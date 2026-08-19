@@ -64,7 +64,7 @@ runs:
       uses: actions/cache/save@v4
       with:
         path: ${{ env.ARTIFACT_NAME }}
-        key: build-go-${{ steps.cache-key.outputs.cache_key }}-${{ inputs.goos }}-${{ inputs.goarch }}
+        key: build-go-${{ env.CACHE_KEY }}-${{ inputs.goos }}-${{ inputs.goarch }}
 
     - name: Upload binary artifact
       uses: actions/upload-artifact@v7

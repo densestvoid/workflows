@@ -28,7 +28,7 @@ Pair with **detect-changes** in the caller repo to skip when Go sources are unch
 | [push-container](.github/actions/push-container) | Load image artifact; push to GHCR and/or Docker Hub |
 | [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`TF_VAR_*` env on the invoking step) |
 | [terraform-output](.github/actions/terraform-output) | Read one Terraform output (same job, after deploy) |
-| [terminate-terraform](.github/actions/terminate-terraform) | Empty-module destroy + S3 state delete (`TF_VAR_*` env on the invoking step) |
+| [terminate-terraform](.github/actions/terminate-terraform) | Empty destroy module + S3 state delete (`terraform-dir`, `TF_VAR_*` env) |
 | [notify](.github/actions/notify) | Slack + PR comment delivery |
 | [setup-go](.github/actions/setup-go) | Checkout + Go toolchain |
 | [install-go-tool](.github/actions/install-go-tool) | Install + cache a Go CLI tool (`~/go/bin/<tool>`) |
@@ -168,6 +168,7 @@ jobs:
   env:
     TF_VAR_do_token: ${{ secrets.DO_TOKEN }}
   with:
+    terraform-dir: terraform/pr-destroy
     backend-key: pr/pr-${{ github.event.pull_request.number }}.tfstate
     terraform-s3-bucket: densestvoid-terraform
     terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
@@ -175,7 +176,7 @@ jobs:
     terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 ```
 
-**terminate-terraform** uses a bundled empty destroy module at `${{ github.action_path }}/pr-destroy`. Pass `terraform-s3-bucket` to match the bucket declared in your app Terraform backend. Terraform variables (e.g. `TF_VAR_do_token`) are set as env on the invoking workflow step, same as **deploy-terraform**.
+**terminate-terraform** runs against an **empty destroy module** in the app repo (`terraform-dir`). The module must declare the same `backend "s3"` bucket as deploy and include any providers needed to destroy resources still in state (e.g. DigitalOcean). Applying the empty config removes all resources; the action then deletes the state file from S3. Terraform variables use `TF_VAR_*` env on the invoking step, same as **deploy-terraform**.
 
 ## Caching
 
@@ -195,9 +196,8 @@ Every action that needs source code checks out the full repo itself. Callers sho
 
 | Action | Checkout |
 |--------|----------|
-| detect-changes, build-go, build-docker, deploy-terraform, setup-go | Full repo |
+| detect-changes, build-go, build-docker, deploy-terraform, terminate-terraform, setup-go | Full repo |
 | push-container, notify, terraform-output | None (artifacts / existing workspace) |
-| terminate-terraform | Bundled `pr-destroy` module only |
 
 ### push-container (GHCR)
 
