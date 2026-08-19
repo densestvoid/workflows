@@ -20,6 +20,9 @@ outputs:
   artifact-name:
     description: 'Artifact name for downstream download'
     value: ${{ env.ARTIFACT_NAME }}
+  cache-key:
+    description: 'Dep-tree fingerprint for image tags and change detection'
+    value: ${{ env.CACHE_KEY }}
 runs:
   using: 'composite'
   steps:

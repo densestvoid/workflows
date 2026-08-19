@@ -1,5 +1,5 @@
 # Reusable Go Checks workflow
-# This workflow performs comprehensive Go code quality checks including vet, static analysis, linting, vulnerability checks, and security checks
+# Parallel Go quality checks: vet, staticcheck, golangci-lint, govulncheck, gosec
 
 name: Go Checks
 
@@ -34,94 +34,164 @@ jobs:
   Vet:
     runs-on: ubuntu-latest
     steps:
-    - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup-go@main
-      with:
-        go-version: ${{ inputs.go-version }}
-        go-version-file: ${{ inputs.go-version-file }}
-        working-directory: ${{ inputs.working-directory }}
+      - uses: actions/checkout@v7
 
-    - name: Vet
-      run: go vet ./...
-      working-directory: ${{ inputs.working-directory }}
-      continue-on-error: false
+      - name: Setup Go (explicit version)
+        if: ${{ inputs.go-version != '' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.go-version }}
+          check-latest: true
+          cache-dependency-path: >-
+            ${{ inputs.working-directory == '.' && 'go.sum'
+              || format('{0}/go.sum', inputs.working-directory) }}
+
+      - name: Setup Go (from version file)
+        if: ${{ inputs.go-version == '' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: >-
+            ${{ inputs.go-version-file != '' && inputs.go-version-file
+              || (inputs.working-directory == '.' && 'go.mod'
+                || format('{0}/go.mod', inputs.working-directory)) }}
+          cache-dependency-path: >-
+            ${{ inputs.working-directory == '.' && 'go.sum'
+              || format('{0}/go.sum', inputs.working-directory) }}
+
+      - name: Vet
+        run: go vet ./...
+        working-directory: ${{ inputs.working-directory }}
 
   Static-Analysis:
     runs-on: ubuntu-latest
     steps:
-    - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup-go@main
-      with:
-        go-version: ${{ inputs.go-version }}
-        go-version-file: ${{ inputs.go-version-file }}
+      - uses: actions/checkout@v7
+
+      - name: Setup Go (explicit version)
+        if: ${{ inputs.go-version != '' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.go-version }}
+          check-latest: true
+          cache-dependency-path: >-
+            ${{ inputs.working-directory == '.' && 'go.sum'
+              || format('{0}/go.sum', inputs.working-directory) }}
+
+      - name: Setup Go (from version file)
+        if: ${{ inputs.go-version == '' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: >-
+            ${{ inputs.go-version-file != '' && inputs.go-version-file
+              || (inputs.working-directory == '.' && 'go.mod'
+                || format('{0}/go.mod', inputs.working-directory)) }}
+          cache-dependency-path: >-
+            ${{ inputs.working-directory == '.' && 'go.sum'
+              || format('{0}/go.sum', inputs.working-directory) }}
+
+      - name: Install staticcheck
+        uses: densestvoid/workflows/.github/actions/install-go-tool@main
+        with:
+          tool-package: honnef.co/go/tools/cmd/staticcheck
+
+      - name: Static analysis
+        run: staticcheck ./...
         working-directory: ${{ inputs.working-directory }}
-
-    - name: Install staticcheck
-      uses: densestvoid/workflows/.github/actions/install-go-tool@main
-      with:
-        tool-package: honnef.co/go/tools/cmd/staticcheck
-
-    - name: Static analysis
-      run: staticcheck ./...
-      working-directory: ${{ inputs.working-directory }}
-      continue-on-error: false
 
   Lint:
     runs-on: ubuntu-latest
     steps:
-    - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup-go@main
-      with:
-        go-version: ${{ inputs.go-version }}
-        go-version-file: ${{ inputs.go-version-file }}
-        working-directory: ${{ inputs.working-directory }}
+      - uses: actions/checkout@v7
 
-    - name: Install golangci-lint
-      uses: densestvoid/workflows/.github/actions/install-go-tool@main
-      with:
-        tool-package: github.com/golangci/golangci-lint/cmd/golangci-lint
+      - name: Setup Go (explicit version)
+        if: ${{ inputs.go-version != '' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.go-version }}
+          check-latest: true
+          cache-dependency-path: >-
+            ${{ inputs.working-directory == '.' && 'go.sum'
+              || format('{0}/go.sum', inputs.working-directory) }}
 
-    - name: Lint
-      run: golangci-lint run ./...
-      working-directory: ${{ inputs.working-directory }}
-      continue-on-error: false
+      - name: Setup Go (from version file)
+        if: ${{ inputs.go-version == '' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: >-
+            ${{ inputs.go-version-file != '' && inputs.go-version-file
+              || (inputs.working-directory == '.' && 'go.mod'
+                || format('{0}/go.mod', inputs.working-directory)) }}
+          cache-dependency-path: >-
+            ${{ inputs.working-directory == '.' && 'go.sum'
+              || format('{0}/go.sum', inputs.working-directory) }}
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: ${{ inputs.working-directory }}
 
   Vulnerability-Check:
     runs-on: ubuntu-latest
     steps:
-    - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup-go@main
-      with:
-        go-version: ${{ inputs.go-version }}
-        go-version-file: ${{ inputs.go-version-file }}
-        working-directory: ${{ inputs.working-directory }}
+      - uses: actions/checkout@v7
 
-    - name: Install govulncheck
-      uses: densestvoid/workflows/.github/actions/install-go-tool@main
-      with:
-        tool-package: golang.org/x/vuln/cmd/govulncheck
+      - name: Setup Go (explicit version)
+        if: ${{ inputs.go-version != '' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.go-version }}
+          check-latest: true
+          cache-dependency-path: >-
+            ${{ inputs.working-directory == '.' && 'go.sum'
+              || format('{0}/go.sum', inputs.working-directory) }}
 
-    - name: Vulnerability check
-      run: govulncheck ./...
-      working-directory: ${{ inputs.working-directory }}
-      continue-on-error: false
+      - name: Setup Go (from version file)
+        if: ${{ inputs.go-version == '' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: >-
+            ${{ inputs.go-version-file != '' && inputs.go-version-file
+              || (inputs.working-directory == '.' && 'go.mod'
+                || format('{0}/go.mod', inputs.working-directory)) }}
+          cache-dependency-path: >-
+            ${{ inputs.working-directory == '.' && 'go.sum'
+              || format('{0}/go.sum', inputs.working-directory) }}
+
+      - name: Vulnerability check
+        uses: golangci/govulncheck-action@v1
+        with:
+          work-dir: ${{ inputs.working-directory }}
 
   Security-Check:
     runs-on: ubuntu-latest
     steps:
-    - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup-go@main
-      with:
-        go-version: ${{ inputs.go-version }}
-        go-version-file: ${{ inputs.go-version-file }}
-        working-directory: ${{ inputs.working-directory }}
+      - uses: actions/checkout@v7
 
-    - name: Install gosec
-      uses: densestvoid/workflows/.github/actions/install-go-tool@main
-      with:
-        tool-package: github.com/securego/gosec/v2/cmd/gosec
+      - name: Setup Go (explicit version)
+        if: ${{ inputs.go-version != '' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ inputs.go-version }}
+          check-latest: true
+          cache-dependency-path: >-
+            ${{ inputs.working-directory == '.' && 'go.sum'
+              || format('{0}/go.sum', inputs.working-directory) }}
 
-    - name: Security check
-      run: gosec ./...
-      working-directory: ${{ inputs.working-directory }}
-      continue-on-error: false
+      - name: Setup Go (from version file)
+        if: ${{ inputs.go-version == '' }}
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: >-
+            ${{ inputs.go-version-file != '' && inputs.go-version-file
+              || (inputs.working-directory == '.' && 'go.mod'
+                || format('{0}/go.mod', inputs.working-directory)) }}
+          cache-dependency-path: >-
+            ${{ inputs.working-directory == '.' && 'go.sum'
+              || format('{0}/go.sum', inputs.working-directory) }}
+
+      - name: Security check
+        uses: securego/gosec@master
+        with:
+          args: >-
+            ${{ inputs.working-directory == '.' && './...'
+              || format('./{0}/...', inputs.working-directory) }}

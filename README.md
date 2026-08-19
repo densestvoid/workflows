@@ -2,7 +2,7 @@
 
 Composable GitHub Actions toolbox for CI, build, deploy, and notify.
 
-**Toolbox, not orchestration.** This repo provides atomic, reusable actions. Each app repo owns workflow triggers, job graphs, `needs:` wiring, and which steps to call. Compose by repeating steps — one `build-go` per binary, one `build-docker` per Dockerfile, one `push-container` per image.
+**Toolbox, not orchestration.** This repo provides atomic, reusable actions. Each app repo owns workflow triggers, job graphs, `needs:` wiring, and which steps to call. Compose by repeating steps — one `build-go` per binary, one `build-push-container` per image.
 
 ## Workflows
 
@@ -22,14 +22,11 @@ Pair with [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in the c
 
 | Action | Purpose |
 |--------|---------|
-| [build-go](.github/actions/build-go) | One Go binary → artifact (binary cache keyed by dep-tree source contents) |
-| [build-docker](.github/actions/build-docker) | One Docker image → artifact (BuildKit `type=gha` layer cache) |
-| [push-container](.github/actions/push-container) | Load image artifact; push to GHCR and/or Docker Hub |
+| [build-go](.github/actions/build-go) | One Go binary → artifact (dep-tree cache key; `cache-key` output for image tags) |
+| [build-push-container](.github/actions/build-push-container) | Build + push Docker image via official Docker actions; skips when tag exists (`image-built` output) |
 | [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`TF_VAR_*` env on the invoking step) |
-| [terraform-output](.github/actions/terraform-output) | Read one Terraform output (same job, after deploy) |
 | [terminate-terraform](.github/actions/terminate-terraform) | Empty destroy module + S3 state delete (`terraform-dir`, `TF_VAR_*` env) |
 | [notify](.github/actions/notify) | Slack (inline JSON payload) + PR comment |
-| [setup-go](.github/actions/setup-go) | Checkout + Go toolchain |
 | [install-go-tool](.github/actions/install-go-tool) | Install + cache a Go CLI tool (`~/go/bin/<tool>`) |
 
 ## Versioning
@@ -59,15 +56,15 @@ Secrets live in **each app repo** (repository secrets/variables, or GitHub Envir
 |---------------------|---------|
 | `DO_TOKEN`, `TERRAFORM_AWS_*` | deploy/terminate terraform |
 | `SLACK_WEBHOOK` | notify |
-| `DOCKERHUB_*` | push-container |
-| `GITHUB_TOKEN` or PAT | push-container (GHCR), notify (PR comments) |
+| `DOCKERHUB_*` | build-push-container |
+| `GITHUB_TOKEN` or PAT | build-push-container (GHCR), notify (PR comments) |
 
 ## Typical PR deploy pipeline
 
 ```yaml
 permissions:
   contents: read
-  packages: write   # required for push-container → GHCR
+  packages: write   # required for build-push-container → GHCR
 
 jobs:
   deploy:
@@ -95,19 +92,13 @@ jobs:
           main-package: ./cmd/server
           artifact-name: budget
 
-      - uses: densestvoid/workflows/.github/actions/build-docker@main
+      - uses: densestvoid/workflows/.github/actions/build-push-container@main
         id: docker
         if: steps.deploy-changes.outputs.deployable == 'true'
         with:
           dockerfile: Dockerfile
           artifacts: ${{ steps.build-go.outputs.artifact-name }}
-
-      - uses: densestvoid/workflows/.github/actions/push-container@main
-        id: push
-        if: steps.deploy-changes.outputs.deployable == 'true'
-        with:
-          image-artifact: ${{ steps.docker.outputs.artifact-name }}
-          tag: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
+          tag: pr-${{ github.event.pull_request.number }}-${{ steps.build-go.outputs.cache-key }}
           ghcr-image: ${{ github.repository }}/my-app
           ghcr-username: ${{ github.actor }}
           ghcr-password: ${{ secrets.GITHUB_TOKEN }}
@@ -116,7 +107,7 @@ jobs:
         if: steps.deploy-changes.outputs.deployable == 'true'
         env:
           TF_VAR_deployment_id: pr-${{ github.event.pull_request.number }}
-          TF_VAR_docker_image_tag: ${{ steps.push.outputs.image-ref }}
+          TF_VAR_docker_image_tag: ${{ steps.docker.outputs.image-ref }}
           TF_VAR_do_token: ${{ secrets.DO_TOKEN }}
         with:
           terraform-dir: terraform/pr
@@ -125,12 +116,14 @@ jobs:
           terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
           terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 
-      - uses: densestvoid/workflows/.github/actions/terraform-output@main
+      - name: Read service URL
         id: service-url
         if: steps.deploy-changes.outputs.deployable == 'true'
-        with:
-          terraform-dir: terraform/pr
-          name: service_url
+        working-directory: terraform/pr
+        run: |
+          set -euo pipefail
+          value=$(terraform output -raw service_url)
+          echo "value=${value}" >> "$GITHUB_OUTPUT"
 
       - uses: densestvoid/workflows/.github/actions/notify@main
         if: always() && steps.deploy-changes.outputs.deployable == 'true'
@@ -204,37 +197,11 @@ jobs:
 
 | Action | Mechanism |
 |--------|-----------|
-| **build-go** | `actions/cache/restore` + `actions/cache/save` on binary at repo root; key from bundled `cachekey` helper (`go/packages` dep tree: `go.mod`/`go.sum`, sources, `EmbedFiles`; active `go` toolchain version) + `GOOS`/`GOARCH`. `setup-go` separately caches module download (`go.sum`). |
-| **build-docker** | BuildKit `--cache-from` / `--cache-to type=gha` (`.dockerignore` applied natively) |
+| **build-go** | `actions/cache/restore` + `actions/cache/save` on binary at repo root; key from bundled `cachekey` helper + `GOOS`/`GOARCH`. Exposes `cache-key` output for Docker tags. |
+| **build-push-container** | `docker/build-push-action` with `cache-from`/`cache-to type=gha`; skips build when tag exists in registry |
 | **install-go-tool** | `actions/cache` on `~/go/bin/<tool>` per package |
 
-Skip logic is caller-owned: use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in workflow `if:` conditions. Build actions do not expose cache-hit outputs.
-
-## Community action alternatives
-
-Prefer maintained third-party actions in app repos where they replace custom bash. This toolbox keeps thin composites only where composition or conventions add value.
-
-| Need | Recommended | Keep toolbox action when… |
-|------|-------------|---------------------------|
-| **Path change detection** | [`dorny/paths-filter@v3`](https://github.com/dorny/paths-filter) | N/A — use community action directly in callers |
-| **Go checkout + toolchain** | [`actions/checkout@v7`](https://github.com/actions/checkout) + [`actions/setup-go@v7`](https://github.com/actions/setup-go) | `setup-go` adds `working-directory` / version-file defaults for `go-checks` |
-| **Go lint** | [`golangci/golangci-lint-action@v6`](https://github.com/golangci/golangci-lint-action) | `go-checks` runs linters in parallel jobs via `install-go-tool` |
-| **Go vuln scan** | [`golangci/govulncheck-action`](https://github.com/golangci/govulncheck-action) | Same — or keep `install-go-tool` + `govulncheck` for one pin |
-| **Go security** | [`securego/gosec@master`](https://github.com/securego/gosec) | Same |
-| **Install Go CLI tool** | Tool-specific actions above, or `go install` + `actions/cache` | `install-go-tool` for generic cached `go install` |
-| **Go binary build + cache** | No drop-in — dep-tree fingerprint is custom | **`build-go`** (`cachekey` helper) |
-| **Docker build** | [`docker/build-push-action@v6`](https://github.com/docker/build-push-action) + [`docker/setup-buildx-action@v4`](https://github.com/docker/setup-buildx-action) | **`build-docker`** when you need image-as-artifact between jobs |
-| **Docker push + tags** | `docker/build-push-action` with `push: true` + [`docker/metadata-action@v5`](https://github.com/docker/metadata-action) | **`push-container`** when build and push are separate jobs |
-| **Terraform init/apply** | [`hashicorp/setup-terraform@v4`](https://github.com/hashicorp/setup-terraform) + [`dflook/terraform-apply@v2`](https://github.com/dflook/terraform-github-actions) | **`deploy-terraform`** for S3 `-backend-config` + `TF_VAR_*` convention |
-| **Terraform destroy + state delete** | `dflook/terraform-apply` (destroy module) + `aws s3 rm` | **`terminate-terraform`** bundles init → apply → S3 cleanup |
-| **Terraform output** | `terraform output -raw` after `setup-terraform`, or [`dflook/terraform-output@v4`](https://github.com/dflook/terraform-github-actions) | **`terraform-output`** for a single named output step |
-| **AWS credentials** | [`aws-actions/configure-aws-credentials@v4`](https://github.com/aws-actions/configure-aws-credentials) | Pass keys via action inputs when using partial S3 backend config only at init |
-| **Slack webhook** | [`slackapi/slack-github-action@v4`](https://github.com/slackapi/slack-github-action) | **`notify`** pairs Slack + PR comment |
-| **PR comment** | [`peter-evans/create-or-update-comment@v4`](https://github.com/peter-evans/create-or-update-comment) or `actions/github-script` | **`notify`** when Slack and PR comment ship together |
-
-**Workflow trigger `paths`:** [GitHub path filters](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushpull_requestpull_request_targetpathspaths-ignore) skip the entire workflow. Do **not** use for CI when branch protection requires a check to run on every PR (e.g. budget's `ci` aggregation job). Use `paths-filter` in-job instead.
-
-**Image tags:** Use `${{ github.sha }}` for one tag per commit, or content-addressed tags from **build-go**'s internal cache key at deploy time (budget's `pr-N-<docker_hash>` pattern). Path filters do not produce content hashes.
+Skip logic is caller-owned: use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in workflow `if:` conditions. **build-push-container** exposes `image-built` when the registry already had the tag (skip container rollout; infra-only Terraform updates may still apply).
 
 ## Caller notes
 
@@ -263,12 +230,23 @@ Every action that needs source code checks out the full repo itself. Callers sho
 
 | Action | Checkout |
 |--------|----------|
-| build-go, build-docker, deploy-terraform, terminate-terraform, setup-go | Full repo |
-| push-container, notify, terraform-output | None (artifacts / existing workspace) |
+| build-go, build-push-container, deploy-terraform, terminate-terraform | Full repo |
+| notify | None (uses github-script; optional checkout in caller) |
 
-### push-container (GHCR)
+### build-push-container
 
-Requires `packages: write` and a token with `write:packages`. Uses `docker/login-action` for registry auth. Use a PAT when `GITHUB_TOKEN` lacks package scope.
+Wraps `docker/setup-buildx-action`, `docker/login-action`, `docker/metadata-action`, and `docker/build-push-action`. Requires `packages: write` for GHCR.
+
+**Outputs:**
+
+| Output | Use |
+|--------|-----|
+| `image-ref` | Pass to `TF_VAR_docker_image_tag` or similar |
+| `image-built` | `false` when registry already had the tag — gate container rollout vs infra-only Terraform |
+
+Content-addressed tags: `pr-${{ github.event.pull_request.number }}-${{ steps.build-go.outputs.cache-key }}`.
+
+Use a PAT when `GITHUB_TOKEN` lacks package scope.
 
 ### Go module layout
 
@@ -297,36 +275,34 @@ go-checks:
 
 Terraform CLI version is resolved by `hashicorp/setup-terraform` (latest release, not pinned).
 
-Read outputs in the same job:
+Read outputs in the same job after **deploy-terraform** (see `.cursor/skills/terraform-output-inline/SKILL.md`):
 
 ```yaml
-- uses: densestvoid/workflows/.github/actions/terraform-output@main
+- name: Read service URL
   id: url
-  with:
-    terraform-dir: terraform
-    name: service_url
-
-- run: echo "${{ steps.url.outputs.value }}"
+  working-directory: terraform/pr
+  run: |
+    set -euo pipefail
+    value=$(terraform output -raw service_url)
+    echo "value=${value}" >> "$GITHUB_OUTPUT"
 ```
 
-Call once per output. Or run `terraform output -raw <name>` directly — `setup-terraform` leaves the CLI on PATH for the job.
+`hashicorp/setup-terraform` from **deploy-terraform** leaves the CLI on PATH for the job.
 
 ### notify (Slack)
 
 **notify** uses `slackapi/slack-github-action` with inline **`slack-payload`** JSON (`text`, `attachments`, `blocks`, …). Callers build the payload in the workflow (simple `{"text":"..."}` or rich attachments like budget's terminate notifications).
 
-### build-docker artifacts
+### build-push-container artifacts input
 
-`upload-artifact` stores files in GitHub's artifact service — they are not kept on disk for later steps. **build-docker** also runs a fresh checkout, which wipes the workspace. Pass prior artifact names via `artifacts` as a comma-separated list (e.g. `budget,worker`). **build-docker** passes them to `actions/download-artifact` `pattern` — no custom download scripting.
-
-Split build and docker across jobs by downloading artifacts in the caller workflow between jobs.
+When **build-go** runs first, pass `artifacts: ${{ steps.build-go.outputs.artifact-name }}` so the Go binary is downloaded into the Docker context before build. **build-push-container** checks out fresh and uses `actions/download-artifact` internally.
 
 ## Known limitations (v0)
 
 | Area | Limitation |
 |------|------------|
 | **build-go** | `CGO_ENABLED=0`; default `GOOS=linux` / `GOARCH=amd64` (override via inputs) — cgo packages won't build |
-| **build-docker** | `actions/download-artifact` when `artifacts` is set; required because checkout wipes workspace |
+| **build-push-container** | `actions/download-artifact` when `artifacts` is set; skips push when tag already in registry |
 | **Testing** | No integration tests in this repo — validate via krogerrecipeshopper rollout |
 
 ## Rollout
@@ -344,18 +320,17 @@ Split build and docker across jobs by downloading artifacts in the caller workfl
 .github/
 ├── workflows/go-checks.yml
 ├── actions/
-│   ├── setup-go/
 │   ├── install-go-tool/
 │   ├── build-go/
 │   │   └── cachekey/            # bundled Go helper for dep-tree fingerprint
-│   ├── build-docker/
-│   ├── push-container/
+│   ├── build-push-container/
 │   ├── deploy-terraform/
-│   ├── terraform-output/
 │   ├── terminate-terraform/
 │   └── notify/
 
 .cursor/
 └── skills/
-    └── write-github-workflows/  # skill: favor official actions over custom scripts
+    ├── write-github-workflows/
+    ├── go-toolchain-setup/
+    └── terraform-output-inline/
 ```
