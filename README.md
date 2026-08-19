@@ -226,7 +226,7 @@ go-checks:
 
 **deploy-terraform** runs `terraform apply -auto-approve`; Terraform variables come from `TF_VAR_*` env vars set on the invoking workflow step (e.g. `TF_VAR_do_token`, `TF_VAR_deployment_id`). Those env vars propagate into the action automatically — no `with:` inputs for module variables. S3 backend credentials are action inputs passed via `terraform init -backend-config` (`access_key`, `secret_key`, `key`, `region`). App Terraform modules must declare `backend "s3"` with bucket and partial config; the action overrides `key` and `region` at init.
 
-**terminate-terraform** applies an empty destroy module from the app repo (`terraform-dir`) against the same `backend-key` as deploy, then runs `aws s3 rm` on the state file (`terraform-s3-bucket`, `|| true`). Same pattern as budget's destroy step. Module variables via `TF_VAR_*` env on the invoking step.
+**terminate-terraform** applies an empty destroy module from the app repo (`terraform-dir`), then deletes the S3 state object with `aws s3 rm` (Terraform does not remove defunct state files). Steps: init → apply → delete state. Module variables via `TF_VAR_*` env on the invoking step.
 
 Terraform CLI version is resolved by `hashicorp/setup-terraform` (latest release, not pinned).
 

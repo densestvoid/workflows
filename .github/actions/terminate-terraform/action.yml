@@ -1,8 +1,9 @@
 name: 'Terminate Terraform'
 description: >-
   Destroy resources from state using the caller repo empty destroy module, then
-  remove the S3 state file. Pass Terraform variables via TF_VAR_* env on the
-  invoking workflow step. AWS S3 backend settings are action inputs.
+  delete the S3 state file with the AWS CLI (Terraform empties state but does
+  not remove the remote object). Pass Terraform variables via TF_VAR_* env on the
+  invoking workflow step. AWS credentials are action inputs.
 inputs:
   terraform-dir:
     description: 'Path to the app repo empty destroy root module (same backend key as deploy)'
@@ -11,16 +12,16 @@ inputs:
     description: 'S3 state key'
     required: true
   terraform-s3-bucket:
-    description: 'S3 state bucket (state file removed after apply)'
+    description: 'S3 state bucket (state file deleted via aws s3 rm after apply)'
     required: true
   terraform-aws-access-key-id:
-    description: 'S3 backend access key ID (passed to terraform init -backend-config)'
+    description: 'AWS access key ID (terraform init -backend-config and aws s3 rm)'
     required: true
   terraform-aws-secret-access-key:
-    description: 'S3 backend secret access key (passed to terraform init -backend-config)'
+    description: 'AWS secret access key (terraform init -backend-config and aws s3 rm)'
     required: true
   terraform-aws-region:
-    description: 'S3 backend region (passed to terraform init -backend-config)'
+    description: 'AWS region (terraform init -backend-config and aws s3 rm)'
     required: true
 runs:
   using: 'composite'
@@ -51,11 +52,11 @@ runs:
         set -euo pipefail
         terraform apply -auto-approve
 
-    - name: Delete state file
+    - name: Delete S3 state file
       shell: bash
-      run: |
-        set -euo pipefail
-        AWS_ACCESS_KEY_ID='${{ inputs.terraform-aws-access-key-id }}' \
-        AWS_SECRET_ACCESS_KEY='${{ inputs.terraform-aws-secret-access-key }}' \
-        AWS_DEFAULT_REGION='${{ inputs.terraform-aws-region }}' \
-        aws s3 rm "s3://${{ inputs.terraform-s3-bucket }}/${{ inputs.backend-key }}" || true
+      continue-on-error: true
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.terraform-aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.terraform-aws-secret-access-key }}
+        AWS_DEFAULT_REGION: ${{ inputs.terraform-aws-region }}
+      run: aws s3 rm "s3://${{ inputs.terraform-s3-bucket }}/${{ inputs.backend-key }}"
