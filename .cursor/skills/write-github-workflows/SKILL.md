@@ -34,15 +34,7 @@ over bespoke bash.
 
 ## Slack payloads
 
-`slack-github-action` accepts **either**:
-
-- **`payload`** — inline JSON/YAML (text, `attachments`, `blocks`, etc.)
-- **`payload-file-path`** — path to a JSON file
-
-A file is **not** required by Slack. Budget uses a file when a prior job builds a
-rich payload with `jq`, uploads it as an artifact, and a later job downloads it
-before calling **notify**. For simple messages, pass `slack-text` or inline
-`slack-payload` JSON to **notify** instead.
+`slack-github-action` accepts inline **`payload`** JSON (text, attachments, blocks). Pass it as **`slack-payload`** to **notify**. Budget builds rich payloads with `jq` in the caller workflow, then passes the JSON string inline (or via a workflow env var).
 
 ## This repo's toolbox actions
 

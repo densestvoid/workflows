@@ -29,7 +29,7 @@ Pair with **detect-changes** in the caller repo to skip when Go sources are unch
 | [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`TF_VAR_*` env on the invoking step) |
 | [terraform-output](.github/actions/terraform-output) | Read one Terraform output (same job, after deploy) |
 | [terminate-terraform](.github/actions/terminate-terraform) | Empty destroy module + S3 state delete (`terraform-dir`, `TF_VAR_*` env) |
-| [notify](.github/actions/notify) | Slack (text, inline JSON payload, or payload file) + PR comment |
+| [notify](.github/actions/notify) | Slack (inline JSON payload) + PR comment |
 | [setup-go](.github/actions/setup-go) | Checkout + Go toolchain |
 | [install-go-tool](.github/actions/install-go-tool) | Install + cache a Go CLI tool (`~/go/bin/<tool>`) |
 
@@ -294,4 +294,8 @@ Split build and docker across jobs by downloading artifacts in the caller workfl
 │   ├── terraform-output/
 │   ├── terminate-terraform/
 │   └── notify/
+
+.cursor/
+└── skills/
+    └── write-github-workflows/  # skill: favor official actions over custom scripts
 ```

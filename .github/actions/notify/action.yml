@@ -1,28 +1,12 @@
 name: 'Notify'
-description: >-
-  Post Slack notification and/or PR comment. Slack: plain slack-text, inline
-  slack-payload JSON (attachments/blocks), or slack-payload-file (budget-style
-  artifact path). PR comment via github-script.
+description: 'Post Slack notification (inline JSON payload) and/or PR comment'
 inputs:
   slack-webhook:
     description: 'Slack incoming webhook URL'
     required: false
     default: ''
-  slack-text:
-    description: 'Plain Slack message text (used when slack-payload and slack-payload-file are unset)'
-    required: false
-    default: ''
   slack-payload:
-    description: >-
-      Slack incoming-webhook JSON payload (text, attachments, blocks, etc.).
-      Passed to slack-github-action payload input — no file required.
-    required: false
-    default: ''
-  slack-payload-file:
-    description: >-
-      Path to a Slack incoming-webhook JSON payload file (e.g. slack-payload.json
-      from a downloaded artifact). Used when the caller builds rich payloads in a
-      prior step.
+    description: 'Slack incoming-webhook JSON payload (text, attachments, blocks, etc.)'
     required: false
     default: ''
   pr-number:
@@ -55,39 +39,10 @@ runs:
             body
           });
 
-    - name: Send Slack notification (payload file)
-      if: >-
-        always() &&
-        inputs.slack-webhook != '' &&
-        inputs.slack-payload-file != '' &&
-        hashFiles(inputs.slack-payload-file) != ''
-      uses: slackapi/slack-github-action@v4.0.0
-      with:
-        webhook-type: incoming-webhook
-        webhook: ${{ inputs.slack-webhook }}
-        payload-file-path: ${{ inputs.slack-payload-file }}
-
-    - name: Send Slack notification (payload)
-      if: >-
-        always() &&
-        inputs.slack-webhook != '' &&
-        inputs.slack-payload != '' &&
-        (inputs.slack-payload-file == '' || hashFiles(inputs.slack-payload-file) == '')
+    - name: Send Slack notification
+      if: always() && inputs.slack-webhook != '' && inputs.slack-payload != ''
       uses: slackapi/slack-github-action@v4.0.0
       with:
         webhook-type: incoming-webhook
         webhook: ${{ inputs.slack-webhook }}
         payload: ${{ inputs.slack-payload }}
-
-    - name: Send Slack notification (text)
-      if: >-
-        always() &&
-        inputs.slack-webhook != '' &&
-        inputs.slack-text != '' &&
-        inputs.slack-payload == '' &&
-        (inputs.slack-payload-file == '' || hashFiles(inputs.slack-payload-file) == '')
-      uses: slackapi/slack-github-action@v4.0.0
-      with:
-        webhook-type: incoming-webhook
-        webhook: ${{ inputs.slack-webhook }}
-        payload: ${{ format('{"text":{0}}', toJSON(inputs.slack-text)) }}
