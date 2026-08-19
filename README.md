@@ -200,6 +200,19 @@ Every action that needs source code checks out the full repo itself. Callers sho
 | detect-changes, build-go, build-docker, deploy-terraform, terminate-terraform, setup-go | Full repo |
 | push-container, notify, terraform-output | None (artifacts / existing workspace) |
 
+### detect-changes
+
+**Steps:** full checkout → fetch base ref → resolve merge-base → expand path globs at HEAD → `git diff` vs merge-base → SHA-256 content hash of matched files (`content-key`).
+
+Outputs:
+
+| Output | Use |
+|--------|-----|
+| `changed` | Caller `if:` skip gates (`steps.*.outputs.changed == 'true'`) |
+| `content-key` | Stable 16-char tag suffix for images (`pr-42-${{ steps.changes.outputs.content-key }}`) |
+
+**Community alternative:** [`dorny/paths-filter@v3`](https://github.com/dorny/paths-filter) is the de facto standard for path-based change detection (filter rules, per-filter outputs, PR/push event handling). Use it when you only need `changed` booleans — it does not hash file contents, so it cannot replace `content-key` for image tags or content-addressed cache keys. This action stays custom for the combined diff + content hash workflow.
+
 ### push-container (GHCR)
 
 Requires `packages: write` and a token with `write:packages`. Uses `docker/login-action` for registry auth. Use a PAT when `GITHUB_TOKEN` lacks package scope.

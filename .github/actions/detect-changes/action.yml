@@ -1,92 +1,131 @@
 name: 'Detect Changes'
-description: 'Path-pattern diff and content hash for any caller-supplied paths'
+description: >-
+  Compare caller-supplied path globs against a base ref and hash matched file
+  contents at HEAD. Outputs changed (git diff vs merge-base) and content-key
+  (16-char SHA-256 of matched file contents for image tags / cache busting).
 inputs:
   paths:
-    description: 'Multiline glob patterns to include in diff and hash'
+    description: |-
+      Multiline glob patterns (e.g. **/*.go, go.mod, terraform/**). Matched
+      tracked files at HEAD are diffed against the merge-base and hashed.
     required: true
   base-ref:
-    description: 'Ref to diff against'
+    description: 'Branch or ref to compare against (default main)'
     required: false
     default: 'main'
 outputs:
   changed:
-    description: 'true when any matched path changed vs base'
+    description: 'true when any matched path differs between merge-base and HEAD'
     value: ${{ steps.detect.outputs.changed }}
   content-key:
-    description: 'Content hash of matched paths at HEAD'
+    description: '16-char SHA-256 of matched file contents at HEAD (empty tree if none)'
     value: ${{ steps.detect.outputs.content-key }}
 runs:
   using: 'composite'
   steps:
-    - name: Checkout
+    - name: Checkout repository
       uses: actions/checkout@v7
       with:
+        # Full clone — required for merge-base and path diffs (no sparse checkout).
         fetch-depth: 0
 
-    - name: Detect changes
-      id: detect
+    - name: Fetch base ref
       shell: bash
       run: |
         set -euo pipefail
+        # Full fetch of the comparison branch so merge-base resolution is reliable.
+        git fetch origin "${{ inputs.base-ref }}"
 
-        BASE_REF="${{ inputs.base-ref }}"
-        mapfile -t PATTERNS < <(printf '%s\n' "${{ inputs.paths }}" | sed '/^[[:space:]]*$/d')
+    - name: Resolve merge base
+      shell: bash
+      run: |
+        set -euo pipefail
+        base_ref="${{ inputs.base-ref }}"
 
-        if [ "${#PATTERNS[@]}" -eq 0 ]; then
-          echo "No paths patterns provided" >&2
+        if git show-ref --verify --quiet "refs/remotes/origin/${base_ref}"; then
+          base="origin/${base_ref}"
+        elif git rev-parse --verify --quiet "${base_ref}" >/dev/null; then
+          base="${base_ref}"
+        else
+          echo "Base ref ${base_ref} not found — falling back to HEAD^" >&2
+          base="HEAD^"
+        fi
+
+        merge_base=$(git merge-base HEAD "${base}" 2>/dev/null || echo "${base}")
+        echo "MERGE_BASE=${merge_base}" >> "$GITHUB_ENV"
+        echo "Merge base: ${merge_base} (from ${base})"
+
+    - name: Collect matched files
+      shell: bash
+      run: |
+        set -euo pipefail
+        matched_file="${RUNNER_TEMP}/detect-changes-matched-files.txt"
+        : > "${matched_file}"
+
+        mapfile -t patterns < <(printf '%s\n' '${{ inputs.paths }}' | sed '/^[[:space:]]*$/d')
+        if [ "${#patterns[@]}" -eq 0 ]; then
+          echo "No path patterns provided" >&2
           exit 1
         fi
 
-        git fetch origin "$BASE_REF" --depth=1 2>/dev/null || git fetch origin "$BASE_REF" || true
-
-        if git show-ref --verify --quiet "refs/remotes/origin/${BASE_REF}"; then
-          BASE="origin/${BASE_REF}"
-        elif git rev-parse --verify --quiet "$BASE_REF" >/dev/null; then
-          BASE="$BASE_REF"
-        else
-          BASE="HEAD^"
-        fi
-
-        MERGE_BASE=$(git merge-base HEAD "$BASE" 2>/dev/null || echo "$BASE")
-
+        # Expand globs against the working tree at HEAD (after full checkout).
         shopt -s globstar nullglob
-        declare -A SEEN=()
-        MATCHED=()
-        for pat in "${PATTERNS[@]}"; do
-          pat="${pat#"${pat%%[![:space:]]*}"}"
-          pat="${pat%"${pat##*[![:space:]]}"}"
-          [ -z "$pat" ] && continue
-          for file in $pat; do
-            if [ -f "$file" ] && [ -z "${SEEN[$file]+x}" ]; then
-              MATCHED+=("$file")
-              SEEN[$file]=1
+        declare -A seen=()
+        for pattern in "${patterns[@]}"; do
+          pattern="${pattern#"${pattern%%[![:space:]]*}"}"
+          pattern="${pattern%"${pattern##*[![:space:]]}"}"
+          [ -z "${pattern}" ] && continue
+          for file in ${pattern}; do
+            if [ -f "${file}" ] && [ -z "${seen[${file}]+x}" ]; then
+              printf '%s\n' "${file}" >> "${matched_file}"
+              seen[${file}]=1
             fi
           done
         done
 
-        CHANGED=false
-        if [ "${#MATCHED[@]}" -eq 0 ]; then
-          CHANGED=false
-        elif git diff --quiet "$MERGE_BASE" HEAD -- "${MATCHED[@]}"; then
-          CHANGED=false
+        sort -u -o "${matched_file}" "${matched_file}"
+        count=$(wc -l < "${matched_file}" | tr -d ' ')
+        echo "MATCHED_FILE=${matched_file}" >> "$GITHUB_ENV"
+        echo "Matched ${count} file(s)"
+
+    - name: Compare against merge base
+      shell: bash
+      run: |
+        set -euo pipefail
+        matched_file="${MATCHED_FILE}"
+
+        if [ ! -s "${matched_file}" ]; then
+          echo "No matched files at HEAD — changed=false"
+          echo "CHANGED=false" >> "$GITHUB_ENV"
+          exit 0
+        fi
+
+        mapfile -t matched < "${matched_file}"
+        if git diff --quiet "${MERGE_BASE}" HEAD -- "${matched[@]}"; then
+          echo "No diff in matched paths between merge-base and HEAD"
+          echo "CHANGED=false" >> "$GITHUB_ENV"
         else
-          CHANGED=true
+          echo "Matched paths changed between merge-base and HEAD"
+          echo "CHANGED=true" >> "$GITHUB_ENV"
         fi
 
-        HASH_INPUT=$(mktemp)
-        trap 'rm -f "$HASH_INPUT"' EXIT
-        : > "$HASH_INPUT"
+    - name: Compute content key
+      id: detect
+      shell: bash
+      run: |
+        set -euo pipefail
+        matched_file="${MATCHED_FILE}"
+        hash_input=$(mktemp)
+        trap 'rm -f "${hash_input}"' EXIT
 
-        if [ "${#MATCHED[@]}" -gt 0 ]; then
-          mapfile -t SORTED < <(printf '%s\n' "${MATCHED[@]}" | sort -u)
-          for file in "${SORTED[@]}"; do
-            printf '%s\0' "$file" >> "$HASH_INPUT"
-            cat "$file" >> "$HASH_INPUT"
-          done
+        if [ -s "${matched_file}" ]; then
+          while IFS= read -r file; do
+            printf '%s\0' "${file}" >> "${hash_input}"
+            cat "${file}" >> "${hash_input}"
+          done < "${matched_file}"
         fi
 
-        CONTENT_KEY=$(sha256sum "$HASH_INPUT" | awk '{print substr($1,1,16)}')
-
+        content_key=$(sha256sum "${hash_input}" | awk '{print substr($1,1,16)}')
         echo "changed=${CHANGED}" >> "$GITHUB_OUTPUT"
-        echo "content-key=${CONTENT_KEY}" >> "$GITHUB_OUTPUT"
-        echo "changed=${CHANGED} content-key=${CONTENT_KEY}"
+        echo "content-key=${content_key}" >> "$GITHUB_OUTPUT"
+        echo "changed=${CHANGED} content-key=${content_key}"
