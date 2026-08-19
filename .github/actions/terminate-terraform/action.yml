@@ -1,17 +1,17 @@
 name: 'Terminate Terraform'
 description: >-
-  Destroy resources from state using the caller repo destroy module, then delete
-  the S3 state file. Pass Terraform variables via TF_VAR_* env on the invoking
-  workflow step. AWS S3 backend settings are action inputs.
+  Destroy resources from state using the caller repo empty destroy module, then
+  remove the S3 state file. Pass Terraform variables via TF_VAR_* env on the
+  invoking workflow step. AWS S3 backend settings are action inputs.
 inputs:
   terraform-dir:
     description: 'Path to the app repo empty destroy root module (same backend key as deploy)'
     required: true
   backend-key:
-    description: 'S3 state key to destroy and delete'
+    description: 'S3 state key'
     required: true
   terraform-s3-bucket:
-    description: 'S3 state bucket (for state file deletion after destroy)'
+    description: 'S3 state bucket (state file removed after apply)'
     required: true
   terraform-aws-access-key-id:
     description: 'S3 backend access key ID (passed to terraform init -backend-config)'
@@ -20,15 +20,8 @@ inputs:
     description: 'S3 backend secret access key (passed to terraform init -backend-config)'
     required: true
   terraform-aws-region:
-    description: 'S3 backend region (passed to terraform init -backend-config and aws cli)'
+    description: 'S3 backend region (passed to terraform init -backend-config)'
     required: true
-outputs:
-  destroyed:
-    description: 'true on successful destroy'
-    value: ${{ steps.terminate.outputs.destroyed }}
-  state-deleted:
-    description: 'true when S3 state file was removed'
-    value: ${{ steps.terminate.outputs.state-deleted }}
 runs:
   using: 'composite'
   steps:
@@ -51,50 +44,18 @@ runs:
           -backend-config="access_key=${{ inputs.terraform-aws-access-key-id }}" \
           -backend-config="secret_key=${{ inputs.terraform-aws-secret-access-key }}"
 
-    - name: Terminate
-      id: terminate
+    - name: Terraform apply
       shell: bash
       working-directory: ${{ inputs.terraform-dir }}
       run: |
         set -euo pipefail
+        terraform apply -auto-approve
 
-        aws_cli() {
-          AWS_ACCESS_KEY_ID='${{ inputs.terraform-aws-access-key-id }}' \
-          AWS_SECRET_ACCESS_KEY='${{ inputs.terraform-aws-secret-access-key }}' \
-          AWS_DEFAULT_REGION='${{ inputs.terraform-aws-region }}' \
-          aws "$@"
-        }
-
-        echo "destroyed=false" >> "$GITHUB_OUTPUT"
-        echo "state-deleted=false" >> "$GITHUB_OUTPUT"
-
-        state_uri="s3://${{ inputs.terraform-s3-bucket }}/${{ inputs.backend-key }}"
-        resource_count=$(terraform state list 2>/dev/null | wc -l | tr -d ' ')
-
-        if [ "$resource_count" -eq 0 ]; then
-          echo "No resources in state — already terminated"
-          echo "destroyed=true" >> "$GITHUB_OUTPUT"
-          if aws_cli s3 rm "$state_uri"; then
-            echo "state-deleted=true" >> "$GITHUB_OUTPUT"
-          elif ! aws_cli s3 ls "$state_uri" >/dev/null 2>&1; then
-            echo "state-deleted=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "State empty but S3 state file could not be removed" >&2
-            exit 1
-          fi
-          exit 0
-        fi
-
-        if ! terraform apply -auto-approve; then
-          echo "Terraform apply failed during state teardown" >&2
-          exit 1
-        fi
-
-        echo "destroyed=true" >> "$GITHUB_OUTPUT"
-
-        if aws_cli s3 rm "$state_uri"; then
-          echo "state-deleted=true" >> "$GITHUB_OUTPUT"
-        else
-          echo "Destroy succeeded but S3 state file could not be removed" >&2
-          exit 1
-        fi
+    - name: Delete state file
+      shell: bash
+      run: |
+        set -euo pipefail
+        AWS_ACCESS_KEY_ID='${{ inputs.terraform-aws-access-key-id }}' \
+        AWS_SECRET_ACCESS_KEY='${{ inputs.terraform-aws-secret-access-key }}' \
+        AWS_DEFAULT_REGION='${{ inputs.terraform-aws-region }}' \
+        aws s3 rm "s3://${{ inputs.terraform-s3-bucket }}/${{ inputs.backend-key }}" || true

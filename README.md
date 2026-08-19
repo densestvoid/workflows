@@ -176,7 +176,7 @@ jobs:
     terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 ```
 
-**terminate-terraform** runs against an **empty destroy module** in the app repo (`terraform-dir`). The module must declare the same `backend "s3"` bucket as deploy and include any providers needed to destroy resources still in state (e.g. DigitalOcean). Applying the empty config removes all resources; the action then deletes the state file from S3. Terraform variables use `TF_VAR_*` env on the invoking step, same as **deploy-terraform**.
+**terminate-terraform** applies the app repo empty destroy module (`terraform-dir`), then removes the state file from S3 (`|| true`, same as budget). Module variables via `TF_VAR_*` env on the invoking step. Skip logic for empty state belongs in the caller workflow.
 
 ## Caching
 
@@ -226,7 +226,7 @@ go-checks:
 
 **deploy-terraform** runs `terraform apply -auto-approve`; Terraform variables come from `TF_VAR_*` env vars set on the invoking workflow step (e.g. `TF_VAR_do_token`, `TF_VAR_deployment_id`). Those env vars propagate into the action automatically — no `with:` inputs for module variables. S3 backend credentials are action inputs passed via `terraform init -backend-config` (`access_key`, `secret_key`, `key`, `region`). App Terraform modules must declare `backend "s3"` with bucket and partial config; the action overrides `key` and `region` at init.
 
-**terminate-terraform** uses a partial S3 backend in `pr-destroy` — pass `terraform-s3-bucket`, `backend-key`, and AWS credentials as action inputs; module variables via `TF_VAR_*` env on the invoking step.
+**terminate-terraform** applies an **empty destroy module** from the app repo (`terraform-dir`) against the same `backend-key` as deploy, then deletes the state file from S3 (`terraform-s3-bucket`). The destroy module must declare `backend "s3"` with the same bucket as deploy and include providers required to tear down resources in state. Module variables via `TF_VAR_*` env on the invoking step.
 
 Terraform CLI version is resolved by `hashicorp/setup-terraform` (latest release, not pinned).
 
@@ -283,6 +283,5 @@ Split build and docker across jobs by downloading artifacts in the caller workfl
 │   ├── deploy-terraform/
 │   ├── terraform-output/
 │   ├── terminate-terraform/
-│   │   └── pr-destroy/          # bundled empty destroy module
 │   └── notify/
 ```
