@@ -32,7 +32,7 @@ over bespoke bash.
 
 ## This repo's toolbox actions
 
-- **build-go** — Go binary + dep-tree cache key (`cache-key` output for image tags)
+- **build-go** — Go binary + dep-tree `cache-key` (binary cache only; not Docker tags)
 - **build-docker** — Docker build/push via official actions; `image-built` for deploy gating
 - **deploy-terraform**, **terminate-terraform**
 - **notify** — Slack (`slack-payload`) + PR comment

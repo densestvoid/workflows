@@ -47,7 +47,7 @@ Replace `inputs.*` with literals when the job is not a reusable workflow.
 |------|-----|
 | `golangci/golangci-lint-action@v6` | golangci-lint (maintainer action) |
 | `golangci/govulncheck-action@v1` | govulncheck |
-| `securego/gosec@master` | gosec (`args: ./...` or `./{dir}/...`) |
+| `securego/gosec@v2` | gosec (`args: ./...` or `./{dir}/...`) |
 | `densestvoid/workflows/.github/actions/install-go-tool` | staticcheck and other tools without maintainer actions |
 
 Run checks with `working-directory:` on `run` steps, or pass `working-directory` / `work-dir` to maintainer actions.

@@ -22,7 +22,7 @@ Pair with [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in the c
 
 | Action | Purpose |
 |--------|---------|
-| [build-go](.github/actions/build-go) | One Go binary → artifact (dep-tree cache key; `cache-key` output for image tags) |
+| [build-go](.github/actions/build-go) | One Go binary → artifact (dep-tree `cache-key` for binary cache; not for Docker tags) |
 | [build-docker](.github/actions/build-docker) | Build + push Docker image via official Docker actions; skips when tag exists (`image-built` output) |
 | [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`TF_VAR_*` env on the invoking step) |
 | [terminate-terraform](.github/actions/terminate-terraform) | Empty destroy module + S3 state delete (`terraform-dir`, `TF_VAR_*` env) |
@@ -98,12 +98,13 @@ jobs:
         with:
           dockerfile: Dockerfile
           artifacts: ${{ steps.build-go.outputs.artifact-name }}
-          tag: pr-${{ github.event.pull_request.number }}-${{ steps.build-go.outputs.cache-key }}
+          tag: pr-${{ github.event.pull_request.number }}-${{ github.sha }}
           ghcr-image: ${{ github.repository }}/my-app
           ghcr-username: ${{ github.actor }}
           ghcr-password: ${{ secrets.GITHUB_TOKEN }}
 
       - uses: densestvoid/workflows/.github/actions/deploy-terraform@main
+        id: deploy
         if: steps.deploy-changes.outputs.deployable == 'true'
         env:
           TF_VAR_deployment_id: pr-${{ github.event.pull_request.number }}
@@ -116,9 +117,10 @@ jobs:
           terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
           terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 
+      # Same job as deploy-terraform — state is initialized; terraform CLI on PATH from setup-terraform inside that action.
       - name: Read service URL
         id: service-url
-        if: steps.deploy-changes.outputs.deployable == 'true'
+        if: steps.deploy-changes.outputs.deployable == 'true' && steps.deploy.outcome == 'success'
         working-directory: terraform/pr
         run: |
           set -euo pipefail
@@ -197,8 +199,8 @@ jobs:
 
 | Action | Mechanism |
 |--------|-----------|
-| **build-go** | `actions/cache/restore` + `actions/cache/save` on binary at repo root; key from bundled `cachekey` helper + `GOOS`/`GOARCH`. Exposes `cache-key` output for Docker tags. |
-| **build-docker** | `docker/build-push-action` with `cache-from`/`cache-to type=gha`; skips build when tag exists in registry |
+| **build-go** | `actions/cache/restore` + `actions/cache/save` on binary; key from bundled `cachekey` helper + `GOOS`/`GOARCH`. `cache-key` output gates binary rebuild only — not Docker image tags. |
+| **build-docker** | `docker/build-push-action` with `cache-from`/`cache-to type=gha`; skips build when caller-supplied `tag` already exists in registry |
 | **install-go-tool** | `actions/cache` on `~/go/bin/<tool>` per package |
 
 Skip logic is caller-owned: use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in workflow `if:` conditions. **build-docker** exposes `image-built` when the registry already had the tag (skip container rollout; infra-only Terraform updates may still apply).
@@ -244,7 +246,7 @@ Wraps `docker/setup-buildx-action`, `docker/login-action`, `docker/metadata-acti
 | `image-ref` | Pass to `TF_VAR_docker_image_tag` or similar |
 | `image-built` | `false` when registry already had the tag — gate container rollout vs infra-only Terraform |
 
-Content-addressed tags: `pr-${{ github.event.pull_request.number }}-${{ steps.build-go.outputs.cache-key }}`.
+Pass **`tag`** yourself (e.g. `pr-42-${{ github.sha }}` or an app-computed image hash). Do not reuse **build-go** `cache-key` — that fingerprints Go sources for binary cache only.
 
 Use a PAT when `GITHUB_TOKEN` lacks package scope.
 
@@ -275,11 +277,16 @@ go-checks:
 
 Terraform CLI version is resolved by `hashicorp/setup-terraform` (latest release, not pinned).
 
-Read outputs in the same job after **deploy-terraform** (see `.cursor/skills/terraform-output-inline/SKILL.md`):
+Read outputs in the **same job**, immediately after **deploy-terraform** succeeds (see `.cursor/skills/terraform-output-inline/SKILL.md`):
 
 ```yaml
+- uses: densestvoid/workflows/.github/actions/deploy-terraform@main
+  id: deploy
+  # ...
+
 - name: Read service URL
   id: url
+  if: steps.deploy.outcome == 'success'
   working-directory: terraform/pr
   run: |
     set -euo pipefail
@@ -287,7 +294,7 @@ Read outputs in the same job after **deploy-terraform** (see `.cursor/skills/ter
     echo "value=${value}" >> "$GITHUB_OUTPUT"
 ```
 
-`hashicorp/setup-terraform` from **deploy-terraform** leaves the CLI on PATH for the job.
+**deploy-terraform** runs `hashicorp/setup-terraform`, so the CLI stays on PATH for later steps in that job. Do not read outputs in a separate job without re-init.
 
 ### notify (Slack)
 
