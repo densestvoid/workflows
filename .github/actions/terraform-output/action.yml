@@ -22,12 +22,13 @@ runs:
     - name: Read output
       id: read
       shell: bash
+      working-directory: ${{ inputs.terraform-dir }}
       run: |
         set -euo pipefail
-        cd "${{ inputs.terraform-dir }}"
-        VALUE=$(terraform output -raw "${{ inputs.name }}")
+        value=$(terraform output -raw "${{ inputs.name }}")
+        # Multiline delimiter: plain value=... breaks when the output contains newlines.
         {
           echo "value<<__TF_OUTPUT_VALUE__"
-          echo "$VALUE"
+          echo "$value"
           echo "__TF_OUTPUT_VALUE__"
         } >> "$GITHUB_OUTPUT"
