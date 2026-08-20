@@ -24,7 +24,7 @@ When writing workflow YAML, look up and pin the **latest release tag** for every
 
 1. `- name: Checkout` → `actions/checkout` (latest release)
 2. `- name: Setup Go` → `actions/setup-go` (latest release; from `go.mod` only)
-3. Tool step (run, maintainer action, or `$/.github/actions/install-go-tool` in reusable workflows)
+3. Tool step (run, maintainer action, or `$/.github/actions/install-go-tool`)
 
 ## Path resolution (reusable workflows)
 
@@ -65,7 +65,7 @@ env:
 | golangci-lint | `golangci/golangci-lint-action` — set `install-mode: goinstall` so lint is built with the `setup-go` toolchain (needed when consumer `go.mod` targets a newer Go than the action’s prebuilt binary) |
 | govulncheck | `golang/govulncheck-action` |
 | gosec | `securego/gosec` |
-| staticcheck | `$/.github/actions/install-go-tool` (reusable workflows); use `./` only in non-reusable workflows that check out this repo |
+| staticcheck | `$/.github/actions/install-go-tool` |
 
 Use maintainer actions or **install-go-tool** — do not ad-hoc `go install` per job.
 
@@ -74,4 +74,4 @@ Use maintainer actions or **install-go-tool** — do not ad-hoc `go install` per
 - `- uses: actions/checkout` without `- name: Checkout`
 - Dual Setup Go steps (explicit version + go-version-file)
 - `densestvoid/workflows/...@main` for **install-go-tool** inside this repo
-- `./.github/actions/...` inside reusable workflows called from consumer repos — resolves in the **caller** checkout; use `$/.github/actions/...` instead
+- `./.github/actions/...` for same-repo actions — resolves in the workspace (and in reusable workflows, the **caller** checkout); use `$/.github/actions/...` instead
