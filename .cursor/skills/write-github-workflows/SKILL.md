@@ -11,14 +11,26 @@ description: >-
 
 ## Skill routing
 
-Read the focused skill first when the task matches:
-
 | Task | Skill |
 |------|-------|
 | Go jobs, go-checks, nested go.mod | [go-toolchain-setup](go-toolchain-setup/SKILL.md) |
-| `./.github/actions/...` inside reusable workflows | [workflows-internal-refs](workflows-internal-refs/SKILL.md) |
 | Read Terraform output after deploy | [terraform-output-inline](terraform-output-inline/SKILL.md) |
-| General toolbox authoring/review | This skill |
+| Everything else in this repo | This skill |
+
+## Internal action refs (this repo only)
+
+Inside `.github/workflows/*.yml` in **this repo**, reference sibling actions with `./.github/actions/...` — not `densestvoid/workflows/...@main`.
+
+| Context | Pattern |
+|---------|---------|
+| Caller repo invokes toolbox | `densestvoid/workflows/.github/workflows/go-checks.yml@v1` |
+| Reusable workflow invokes sibling action | `./.github/actions/install-go-tool` |
+
+Relative paths resolve at the **ref the caller pinned** on the reusable workflow. Example: app pins `go-checks.yml@v1` → `./.github/actions/install-go-tool` is also `@v1`.
+
+`github.ref` / `github.sha` refer to the **caller** — only matters if the workflow must checkout this repo for scripts beyond the action definition.
+
+Canonical: `.github/workflows/go-checks.yml` Static-Analysis job.
 
 ## Design principles
 
@@ -37,7 +49,7 @@ Read the focused skill first when the task matches:
 | Go toolchain | checkout + setup-go — see **go-toolchain-setup** | Removed **setup-go** composite |
 | Go checks | Reusable **go-checks.yml** | Duplicating five parallel jobs in every app |
 | Terraform output (same job) | Inline `terraform output -raw` — see **terraform-output-inline** | Removed **terraform-output** |
-| Internal refs in reusable workflows | `./.github/actions/...` — see **workflows-internal-refs** | `@main` self-references in this repo |
+| Internal refs in reusable workflows | `./.github/actions/...` | `@main` self-references in this repo |
 | Slack + PR notify | **notify** | Duplicate slack + github-script |
 | Deploy / destroy | **deploy-terraform** / **terminate-terraform** | Inline init/apply/s3 rm |
 | Cache | `actions/cache/restore` + `actions/cache/save` @v6 | Custom cache dirs |

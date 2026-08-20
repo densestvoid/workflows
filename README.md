@@ -337,8 +337,7 @@ When **build-go** runs first, pass `artifacts: ${{ steps.build-go.outputs.artifa
 
 .cursor/
 └── skills/
-    ├── write-github-workflows/   # hub — routes to focused skills below
-    ├── workflows-internal-refs/  # ./.github/actions/... in reusable workflows
+    ├── write-github-workflows/   # hub for toolbox authoring
     ├── go-toolchain-setup/
     └── terraform-output-inline/
 ```

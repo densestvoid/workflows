@@ -17,8 +17,6 @@ description: >-
 - Nested `go.mod` / `working-directory` inputs
 - Choosing which linter/vuln/security action to use
 
-For toolbox action refs inside reusable workflows, also read [workflows-internal-refs](../workflows-internal-refs/SKILL.md).
-
 ## Job step order
 
 Every Go check job follows this order:
