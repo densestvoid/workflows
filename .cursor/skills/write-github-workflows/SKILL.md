@@ -17,19 +17,23 @@ description: >-
 | Read Terraform output after deploy | [terraform-output-inline](terraform-output-inline/SKILL.md) |
 | Everything else in this repo | This skill |
 
+## Version pins
+
+When authoring or editing workflow YAML, pin the **latest release tag** for every third-party action. Do not hardcode stale major-only pins from examples; look up current latest at authoring time. Dependabot bumps third-party `uses:` tags afterward.
+
 ## Internal action refs (this repo only)
 
 | Context | Pattern |
 |---------|---------|
-| Caller repo invokes toolbox | `densestvoid/workflows/.github/workflows/go-checks.yml@v1` |
-| Reusable workflow invokes sibling action | `./.github/actions/install-go-tool` |
+| Caller repo invokes toolbox | `densestvoid/workflows/.github/workflows/go-checks.yml@<tag>` |
+| Reusable workflow invokes sibling action | `$/.github/actions/install-go-tool` |
 
-Relative `./` paths resolve at the ref the caller pinned on the reusable workflow.
+`$/` resolves to this workflows repo at the commit the caller pinned (requires runner ≥ 2.336.0). Do **not** use `./.github/actions/...` inside reusable workflows — that path resolves in the **caller** checkout and fails for consumer repos.
 
 ## Design principles
 
 1. **Toolbox, not orchestration** — app repos own triggers, job graphs, `needs:`, and skip gates
-2. **Caller-owned skip** — `dorny/paths-filter@v3` in workflow `if:`, not trigger `paths` when required checks must still run
+2. **Caller-owned skip** — `dorny/paths-filter` (latest release) in workflow `if:`, not trigger `paths` when required checks must still run
 3. **Atomic actions** — one concern per composite; delegate to official/maintainer actions inside
 4. **TF_VAR_*** — Terraform module variables via env on the invoking step
 5. **Encapsulated internals** — cache keys and registry inspect logic stay inside actions
@@ -38,12 +42,12 @@ Relative `./` paths resolve at the ref the caller pinned on the reusable workflo
 
 | Need | Use | Avoid |
 |------|-----|-------|
-| Path skip gates | `dorny/paths-filter@v3` | Custom git diff; trigger `paths` blocking required CI |
+| Path skip gates | `dorny/paths-filter` (latest release) | Custom git diff; trigger `paths` blocking required CI |
 | Docker build + push | **build-docker** | Raw buildx/login/metadata chain in callers |
 | Go toolchain | checkout + setup-go | Removed **setup-go** composite |
 | Go checks | Reusable **go-checks.yml** | Duplicating five parallel jobs |
 | Terraform output (same job) | Inline `terraform output -raw` | Removed **terraform-output** |
-| Internal refs in reusable workflows | `./.github/actions/...` | `@main` self-references in this repo |
+| Internal refs in reusable workflows | `$/.github/actions/...` | `./.github/actions/...` (caller checkout); `@main` self-references in this repo |
 | Slack + PR notify | **notify** | Duplicate slack + github-script |
 | Deploy / destroy | **deploy-terraform** / **terminate-terraform** | Inline init/apply/s3 rm |
 
@@ -76,6 +80,7 @@ Dependabot config lives in `.github/dependabot.yml`. Schedule weekly on Monday. 
 | `actions/*`, `dorny/*`, `hashicorp/*`, maintainer actions | Yes — `github-actions` group |
 | `densestvoid/workflows/...` (toolbox reusable workflows/actions) | Yes — separate `workflows-toolbox` group |
 | `./.github/actions/...` (local composites) | No |
+| `$/.github/actions/...` (self-repo at running commit) | No — inherits the reusable workflow pin |
 
 ### This repo (workflows toolbox)
 
@@ -176,9 +181,10 @@ Reference: `densestvoid/budget` `.github/dependabot.yml` (single root `gomod`/`d
 
 ## Review checklist
 
-- [ ] Skip gates use `dorny/paths-filter`
+- [ ] Skip gates use `dorny/paths-filter` (latest release)
 - [ ] Go jobs: named Checkout + Setup Go from go-version-file only
-- [ ] Internal reusable-workflow refs use `./.github/actions/...`
+- [ ] Third-party actions pin latest release tags (not stale majors / invalid bare tags)
+- [ ] Internal reusable-workflow sibling refs use `$/.github/actions/...` (not `./`)
 - [ ] Comments and docs stay scoped to the file they are in
 - [ ] README example matches current action inputs
 - [ ] Dependabot: workflows repo groups all `github-actions` with `*`; app repos split `workflows-toolbox` from third-party pins and use one entry per `go.mod`, Dockerfile, and terraform root
