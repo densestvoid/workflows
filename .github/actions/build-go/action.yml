@@ -20,9 +20,6 @@ outputs:
   artifact-name:
     description: 'Artifact name for downstream download'
     value: ${{ env.ARTIFACT_NAME }}
-  cache-key:
-    description: 'Dep-tree fingerprint for binary cache (not for Docker image tags)'
-    value: ${{ env.CACHE_KEY }}
 runs:
   using: 'composite'
   steps:

@@ -22,8 +22,8 @@ Pair with [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in the c
 
 | Action | Purpose |
 |--------|---------|
-| [build-go](.github/actions/build-go) | One Go binary → artifact (dep-tree `cache-key` for binary cache; not for Docker tags) |
-| [build-docker](.github/actions/build-docker) | Build + push Docker image via official Docker actions; skips when tag exists (`image-built` output) |
+| [build-go](.github/actions/build-go) | One Go binary → artifact (binary cache internal to the action) |
+| [build-docker](.github/actions/build-docker) | Build + push to GHCR; optional Docker Hub; skips when GHCR tag exists (`image-built`) |
 | [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`TF_VAR_*` env on the invoking step) |
 | [terminate-terraform](.github/actions/terminate-terraform) | Empty destroy module + S3 state delete (`terraform-dir`, `TF_VAR_*` env) |
 | [notify](.github/actions/notify) | Slack (inline JSON payload) + PR comment |
@@ -199,8 +199,8 @@ jobs:
 
 | Action | Mechanism |
 |--------|-----------|
-| **build-go** | `actions/cache/restore` + `actions/cache/save` on binary; key from bundled `cachekey` helper + `GOOS`/`GOARCH`. `cache-key` output gates binary rebuild only — not Docker image tags. |
-| **build-docker** | `docker/build-push-action` with `cache-from`/`cache-to type=gha`; skips build when caller-supplied `tag` already exists in registry |
+| **build-go** | `actions/cache/restore` + `actions/cache/save` on binary; dep-tree key from bundled helper + `GOOS`/`GOARCH` (internal — no output) |
+| **build-docker** | BuildKit GHA cache scoped to `ghcr-image`; skips build when caller-supplied `tag` already exists on GHCR |
 | **install-go-tool** | `actions/cache` on `~/go/bin/<tool>` per package |
 
 Skip logic is caller-owned: use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in workflow `if:` conditions. **build-docker** exposes `image-built` when the registry already had the tag (skip container rollout; infra-only Terraform updates may still apply).
@@ -237,16 +237,16 @@ Every action that needs source code checks out the full repo itself. Callers sho
 
 ### build-docker
 
-Wraps `docker/setup-buildx-action`, `docker/login-action`, `docker/metadata-action`, and `docker/build-push-action`. Requires `packages: write` for GHCR.
+Wraps `docker/setup-buildx-action`, `docker/login-action`, and `docker/build-push-action`. **GHCR is required**; Docker Hub is an optional second push. Requires `packages: write` for GHCR.
+
+**Inputs:** `ghcr-image` is the path **without** `ghcr.io/` (e.g. `${{ github.repository }}/my-app`). Pass **`tag`** yourself (e.g. `pr-42-${{ github.sha }}`).
 
 **Outputs:**
 
 | Output | Use |
 |--------|-----|
-| `image-ref` | Pass to `TF_VAR_docker_image_tag` or similar |
-| `image-built` | `false` when registry already had the tag — gate container rollout vs infra-only Terraform |
-
-Pass **`tag`** yourself (e.g. `pr-42-${{ github.sha }}` or an app-computed image hash). Do not reuse **build-go** `cache-key` — that fingerprints Go sources for binary cache only.
+| `image-ref` | GHCR reference — pass to `TF_VAR_docker_image_tag` or similar |
+| `image-built` | `false` when GHCR already had the tag — gate container rollout vs infra-only Terraform |
 
 Use a PAT when `GITHUB_TOKEN` lacks package scope.
 

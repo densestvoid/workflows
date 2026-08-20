@@ -60,4 +60,3 @@ Run in the **same job**, immediately after **deploy-terraform** succeeds:
 
 - Removed **terraform-output** composite — do not recreate it
 - Reading outputs in a separate job without `terraform init`
-- Using **build-go** `cache-key` or Docker tags where a Terraform output is needed

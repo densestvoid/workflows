@@ -1,8 +1,8 @@
 name: 'Build Docker'
 description: >-
-  Build and push a Docker image via official Docker actions. Skips build when
-  the tag already exists in the registry (imagetools inspect). Outputs image-ref
-  and image-built for deploy gating.
+  Build and push a Docker image to GHCR via official Docker actions. Optionally
+  pushes the same tag to Docker Hub. Skips build when the GHCR tag already
+  exists (imagetools inspect). Outputs image-ref and image-built.
 inputs:
   context-path:
     description: 'Docker build context path'
@@ -17,124 +17,39 @@ inputs:
     required: false
     default: ''
   tag:
-    description: 'Registry tag (without registry prefix)'
+    description: 'Image tag (without registry prefix)'
     required: true
-  cache-scope:
-    description: 'BuildKit GHA cache scope (default: ghcr image name or dockerhub image)'
-    required: false
-    default: ''
   ghcr-image:
-    description: 'GHCR image (e.g. owner/repo/app)'
-    required: false
-    default: ''
+    description: 'GHCR image path without ghcr.io/ prefix (e.g. owner/repo/app)'
+    required: true
   ghcr-username:
     description: 'GHCR username'
-    required: false
-    default: ''
+    required: true
   ghcr-password:
     description: 'GHCR password or token'
-    required: false
-    default: ''
+    required: true
   dockerhub-image:
-    description: 'Docker Hub image (e.g. user/app)'
+    description: 'Optional Docker Hub image (e.g. user/app)'
     required: false
     default: ''
   dockerhub-username:
-    description: 'Docker Hub username'
+    description: 'Docker Hub username (required when dockerhub-image is set)'
     required: false
     default: ''
   dockerhub-password:
-    description: 'Docker Hub password or token'
+    description: 'Docker Hub password or token (required when dockerhub-image is set)'
     required: false
     default: ''
 outputs:
   image-ref:
-    description: 'Primary registry image reference (tag applied)'
+    description: 'GHCR image reference with tag'
     value: ${{ steps.result.outputs.image-ref }}
   image-built:
-    description: 'true when build-push ran; false when registry already had the tag'
+    description: 'true when build-push ran; false when GHCR already had the tag'
     value: ${{ steps.result.outputs.image-built }}
-  ghcr-image-ref:
-    description: 'GHCR image reference when GHCR is configured'
-    value: ${{ steps.result.outputs.ghcr-image-ref }}
-  ghcr-pushed:
-    description: 'true when pushed to GHCR in this run'
-    value: ${{ steps.result.outputs.ghcr-pushed }}
-  dockerhub-image-ref:
-    description: 'Docker Hub image reference when Docker Hub is configured'
-    value: ${{ steps.result.outputs.dockerhub-image-ref }}
-  dockerhub-pushed:
-    description: 'true when pushed to Docker Hub in this run'
-    value: ${{ steps.result.outputs.dockerhub-pushed }}
 runs:
   using: 'composite'
   steps:
-    - name: Resolve registries and cache scope
-      id: config
-      shell: bash
-      run: |
-        set -euo pipefail
-        configured=0
-        metadata_images=""
-        primary_ref=""
-        ghcr_image=""
-
-        if [ -n "${{ inputs.ghcr-image }}" ] && [ -n "${{ inputs.ghcr-username }}" ] && [ -n "${{ inputs.ghcr-password }}" ]; then
-          if [[ "${{ inputs.ghcr-image }}" == ghcr.io/* ]]; then
-            ghcr_image="${{ inputs.ghcr-image }}"
-          else
-            ghcr_image="ghcr.io/${{ inputs.ghcr-image }}"
-          fi
-          ghcr_ref="${ghcr_image}:${{ inputs.tag }}"
-          echo "ghcr=true" >> "$GITHUB_OUTPUT"
-          echo "ghcr-ref=${ghcr_ref}" >> "$GITHUB_OUTPUT"
-          metadata_images="${ghcr_image}"
-          primary_ref="${ghcr_ref}"
-          configured=$((configured + 1))
-        else
-          echo "ghcr=false" >> "$GITHUB_OUTPUT"
-        fi
-
-        if [ -n "${{ inputs.dockerhub-image }}" ] && [ -n "${{ inputs.dockerhub-username }}" ] && [ -n "${{ inputs.dockerhub-password }}" ]; then
-          dockerhub_ref="${{ inputs.dockerhub-image }}:${{ inputs.tag }}"
-          echo "dockerhub=true" >> "$GITHUB_OUTPUT"
-          echo "dockerhub-ref=${dockerhub_ref}" >> "$GITHUB_OUTPUT"
-          if [ -n "${metadata_images}" ]; then
-            metadata_images="${metadata_images}"$'\n'"${{ inputs.dockerhub-image }}"
-          else
-            metadata_images="${{ inputs.dockerhub-image }}"
-          fi
-          if [ -z "${primary_ref}" ]; then
-            primary_ref="${dockerhub_ref}"
-          fi
-          configured=$((configured + 1))
-        else
-          echo "dockerhub=false" >> "$GITHUB_OUTPUT"
-        fi
-
-        if [ "$configured" -eq 0 ]; then
-          echo "No registries configured" >&2
-          exit 1
-        fi
-
-        cache_scope='${{ inputs.cache-scope }}'
-        if [ -z "${cache_scope}" ]; then
-          if [ -n "${ghcr_image:-}" ]; then
-            cache_scope="${ghcr_image##*/}"
-          else
-            cache_scope="${{ inputs.dockerhub-image }}"
-            cache_scope="${cache_scope##*/}"
-          fi
-        fi
-
-        echo "primary-ref=${primary_ref}" >> "$GITHUB_OUTPUT"
-        echo "cache-scope=${cache_scope}" >> "$GITHUB_OUTPUT"
-        {
-          echo "metadata-images<<EOF"
-          echo "${metadata_images}"
-          echo "EOF"
-        } >> "$GITHUB_OUTPUT"
-
     - name: Checkout Docker context
       uses: actions/checkout@v7
 
@@ -150,7 +65,6 @@ runs:
       uses: docker/setup-buildx-action@v4
 
     - name: Login to GHCR
-      if: steps.config.outputs.ghcr == 'true'
       uses: docker/login-action@v4
       with:
         registry: ghcr.io
@@ -158,7 +72,10 @@ runs:
         password: ${{ inputs.ghcr-password }}
 
     - name: Login to Docker Hub
-      if: steps.config.outputs.dockerhub == 'true'
+      if: >-
+        inputs.dockerhub-image != '' &&
+        inputs.dockerhub-username != '' &&
+        inputs.dockerhub-password != ''
       uses: docker/login-action@v4
       with:
         username: ${{ inputs.dockerhub-username }}
@@ -169,7 +86,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
-        ref="${{ steps.config.outputs.primary-ref }}"
+        ref="ghcr.io/${{ inputs.ghcr-image }}:${{ inputs.tag }}"
         if docker buildx imagetools inspect "${ref}" >/dev/null 2>&1; then
           echo "Image already in registry: ${ref}"
           echo "exists=true" >> "$GITHUB_OUTPUT"
@@ -178,56 +95,41 @@ runs:
           echo "exists=false" >> "$GITHUB_OUTPUT"
         fi
 
-    - name: Docker metadata
-      id: meta
+    - name: Resolve push tags
+      id: tags
       if: steps.inspect.outputs.exists != 'true'
-      uses: docker/metadata-action@v5
-      with:
-        images: ${{ steps.config.outputs.metadata-images }}
-        tags: |
-          type=raw,value=${{ inputs.tag }}
+      shell: bash
+      run: |
+        set -euo pipefail
+        {
+          echo "value<<EOF"
+          echo "ghcr.io/${{ inputs.ghcr-image }}:${{ inputs.tag }}"
+          if [ -n "${{ inputs.dockerhub-image }}" ]; then
+            echo "${{ inputs.dockerhub-image }}:${{ inputs.tag }}"
+          fi
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
 
     - name: Build and push
-      id: build
       if: steps.inspect.outputs.exists != 'true'
       uses: docker/build-push-action@v6
       with:
         context: ${{ inputs.context-path }}
         file: ${{ inputs.dockerfile }}
         push: true
-        tags: ${{ steps.meta.outputs.tags }}
-        labels: ${{ steps.meta.outputs.labels }}
-        cache-from: type=gha,scope=${{ steps.config.outputs.cache-scope }}
-        cache-to: type=gha,scope=${{ steps.config.outputs.cache-scope }},mode=max
+        tags: ${{ steps.tags.outputs.value }}
+        cache-from: type=gha,scope=${{ inputs.ghcr-image }}
+        cache-to: type=gha,scope=${{ inputs.ghcr-image }},mode=max
 
     - name: Set outputs
       id: result
       shell: bash
       run: |
         set -euo pipefail
-        primary_ref="${{ steps.config.outputs.primary-ref }}"
-
+        ref="ghcr.io/${{ inputs.ghcr-image }}:${{ inputs.tag }}"
+        echo "image-ref=${ref}" >> "$GITHUB_OUTPUT"
         if [ "${{ steps.inspect.outputs.exists }}" = "true" ]; then
-          echo "image-ref=${primary_ref}" >> "$GITHUB_OUTPUT"
           echo "image-built=false" >> "$GITHUB_OUTPUT"
-          if [ "${{ steps.config.outputs.ghcr }}" = "true" ]; then
-            echo "ghcr-image-ref=${{ steps.config.outputs.ghcr-ref }}" >> "$GITHUB_OUTPUT"
-            echo "ghcr-pushed=false" >> "$GITHUB_OUTPUT"
-          fi
-          if [ "${{ steps.config.outputs.dockerhub }}" = "true" ]; then
-            echo "dockerhub-image-ref=${{ steps.config.outputs.dockerhub-ref }}" >> "$GITHUB_OUTPUT"
-            echo "dockerhub-pushed=false" >> "$GITHUB_OUTPUT"
-          fi
-          exit 0
-        fi
-
-        echo "image-ref=${primary_ref}" >> "$GITHUB_OUTPUT"
-        echo "image-built=true" >> "$GITHUB_OUTPUT"
-        if [ "${{ steps.config.outputs.ghcr }}" = "true" ]; then
-          echo "ghcr-image-ref=${{ steps.config.outputs.ghcr-ref }}" >> "$GITHUB_OUTPUT"
-          echo "ghcr-pushed=true" >> "$GITHUB_OUTPUT"
-        fi
-        if [ "${{ steps.config.outputs.dockerhub }}" = "true" ]; then
-          echo "dockerhub-image-ref=${{ steps.config.outputs.dockerhub-ref }}" >> "$GITHUB_OUTPUT"
-          echo "dockerhub-pushed=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "image-built=true" >> "$GITHUB_OUTPUT"
         fi

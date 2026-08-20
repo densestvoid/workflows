@@ -38,14 +38,14 @@ Canonical: `.github/workflows/go-checks.yml` Static-Analysis job.
 2. **Caller-owned skip** — `dorny/paths-filter@v3` in workflow `if:`, not workflow trigger `paths` when required checks must still run
 3. **Atomic actions** — one concern per composite; delegate to official/maintainer actions inside composites
 4. **TF_VAR_*** — Terraform module variables via env on the invoking step, not action inputs
-5. **cache-key ≠ Docker tag** — **build-go** `cache-key` is binary cache only; **build-docker** `tag` is caller-supplied
+5. **Encapsulated cache** — **build-go** caches internally; **build-docker** `tag` is caller-supplied for registry skip
 
 ## Default choices
 
 | Need | Use | Avoid |
 |------|-----|-------|
 | Path skip gates | `dorny/paths-filter@v3` | Custom git diff; trigger `paths` blocking required CI |
-| Docker build + push | **build-docker** | Raw buildx/login/metadata chain in callers |
+| Docker build + push | **build-docker** (GHCR required; Docker Hub optional) | Raw buildx/login chain in callers; metadata-action boilerplate |
 | Go toolchain | checkout + setup-go — see **go-toolchain-setup** | Removed **setup-go** composite |
 | Go checks | Reusable **go-checks.yml** | Duplicating five parallel jobs in every app |
 | Terraform output (same job) | Inline `terraform output -raw` — see **terraform-output-inline** | Removed **terraform-output** |
@@ -58,8 +58,8 @@ Canonical: `.github/workflows/go-checks.yml` Static-Analysis job.
 
 | Action | Purpose |
 |--------|---------|
-| **build-go** | One binary + artifact; `cache-key` for binary cache only |
-| **build-docker** | Build/push; skips when registry tag exists (`image-built`) |
+| **build-go** | One binary + artifact; binary cache internal |
+| **build-docker** | GHCR push + optional Docker Hub; `image-built` when tag exists |
 | **deploy-terraform** | init + apply |
 | **terminate-terraform** | destroy module + S3 state delete |
 | **notify** | Slack + PR comment |
@@ -81,6 +81,5 @@ Pin callers at one repo ref (`@v1`). Bump all pins together on release.
 - [ ] **build-docker** in callers, not raw Docker action chain
 - [ ] Go jobs: named Checkout + Setup Go from go-version-file only
 - [ ] Internal reusable-workflow refs use `./.github/actions/...`
-- [ ] `cache-key` not used for Docker tags
 - [ ] README example matches current action inputs
 - [ ] Focused skill updated if pattern changed
