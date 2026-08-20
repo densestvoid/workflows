@@ -3,8 +3,8 @@ name: write-github-workflows
 description: >-
   Authors and reviews GitHub Actions workflows and composite actions for the
   densestvoid/workflows toolbox. Use when adding or changing .github/workflows,
-  .github/actions, README deploy examples, caller skip logic, or reviewing PRs
-  in this repo.
+  .github/actions, .github/dependabot.yml, README deploy examples, caller skip
+  logic, or reviewing PRs in this repo.
 ---
 
 # Write GitHub Workflows
@@ -65,6 +65,115 @@ Relative `./` paths resolve at the ref the caller pinned on the reusable workflo
 - Inline comments explain non-obvious bash or `${{ }}` syntax, not other actions
 - Reusable workflow headers document expression syntax used in that file
 
+## Dependabot
+
+Dependabot config lives in `.github/dependabot.yml`. Schedule weekly on Monday. Use groups to batch related updates into one PR per group.
+
+### What Dependabot updates
+
+| `uses:` ref type | Updated by `github-actions` ecosystem? |
+|------------------|----------------------------------------|
+| `actions/*`, `dorny/*`, `hashicorp/*`, maintainer actions | Yes — `github-actions` group |
+| `densestvoid/workflows/...` (toolbox reusable workflows/actions) | Yes — separate `workflows-toolbox` group |
+| `./.github/actions/...` (local composites) | No |
+
+### This repo (workflows toolbox)
+
+Only `github-actions` — no app `gomod`, `docker`, or `terraform` trees to track. Group **all** action and workflow pins in one PR (`patterns: ["*"]`); do not split by publisher (e.g. `actions/*` only).
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns:
+          - "*"
+```
+
+Canonical file: `.github/dependabot.yml`.
+
+### App repos (budget pattern)
+
+Full-stack app repos add every ecosystem they ship. One `package-ecosystem` entry per root (same model as terraform): each `go.mod` directory, each Dockerfile directory, each `terraform/<env>` directory.
+
+| Ecosystem | `directory` | Group name | When to include |
+|-----------|-------------|------------|-----------------|
+| `github-actions` | `/` | `workflows-toolbox` | App pins `densestvoid/workflows@...` |
+| `github-actions` | `/` | `github-actions` | All other third-party pins |
+| `gomod` | `/` or module root | `gomod-<name>` | One entry per `go.mod` (e.g. `/`, `/backend`) |
+| `docker` | `/` or image root | `docker-<name>` | One entry per Dockerfile directory |
+| `terraform` | `/terraform/<env>` | `terraform-<env>` | One entry per Terraform root |
+
+**github-actions** — split toolbox from everything else so toolbox bumps surface as their own PR (which apps need updating, and to what ref):
+
+```yaml
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      workflows-toolbox:
+        patterns:
+          - "densestvoid/workflows*"
+      github-actions:
+        patterns:
+          - "*"
+        exclude-patterns:
+          - "densestvoid/workflows*"
+```
+
+**gomod / docker / terraform** — duplicate the block per root; name each group after the path:
+
+```yaml
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      gomod-root:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /backend
+    schedule: { interval: weekly, day: monday }
+    groups:
+      gomod-backend:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      docker-root:
+        patterns: ["*"]
+
+  - package-ecosystem: terraform
+    directory: /terraform/pr
+    schedule: { interval: weekly, day: monday }
+    groups:
+      terraform-pr:
+        patterns: ["*"]
+
+  - package-ecosystem: terraform
+    directory: /terraform/production
+    schedule: { interval: weekly, day: monday }
+    groups:
+      terraform-production:
+        patterns: ["*"]
+```
+
+Reference: `densestvoid/budget` `.github/dependabot.yml` (single root `gomod`/`docker`; two terraform roots).
+
+### Reviewing Dependabot PRs
+
+- **github-actions (workflows repo):** run **go-checks** — all pin bumps land in one grouped PR
+- **workflows-toolbox (app repo):** CI must pass; verify every `densestvoid/workflows@...` pin moved together (reusable workflow + action refs at the same tag)
+- **github-actions (app repo):** CI and deploy workflows exercise checkout, paths-filter, and artifact actions
+- **gomod / docker / terraform:** scoped CI for that root; deploy-path filters that watch `go.mod`, `Dockerfile`, or `terraform/**`
+
 ## Review checklist
 
 - [ ] Skip gates use `dorny/paths-filter`
@@ -72,3 +181,4 @@ Relative `./` paths resolve at the ref the caller pinned on the reusable workflo
 - [ ] Internal reusable-workflow refs use `./.github/actions/...`
 - [ ] Comments and docs stay scoped to the file they are in
 - [ ] README example matches current action inputs
+- [ ] Dependabot: workflows repo groups all `github-actions` with `*`; app repos split `workflows-toolbox` from third-party pins and use one entry per `go.mod`, Dockerfile, and terraform root
