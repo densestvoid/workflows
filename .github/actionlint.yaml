@@ -1,0 +1,7 @@
+# Ignore until rhysd/actionlint supports GitHub's $/ self-repository syntax:
+# https://github.com/rhysd/actionlint/issues/711#issuecomment-5136214696
+paths:
+  .github/workflows/**/*.{yml,yaml}:
+    ignore:
+      - 'reusable workflow call "\$/.+" at "uses" is not following the format'
+      - 'specifying action "\$/.+" in invalid format because ref is missing'
