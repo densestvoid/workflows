@@ -92,7 +92,7 @@ jobs:
           cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 
       - name: Lint
-        uses: golangci/golangci-lint-action@v6
+        uses: golangci/golangci-lint-action@v9
         with:
           working-directory: ${{ inputs.working-directory }}
 
