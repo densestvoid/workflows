@@ -1,9 +1,12 @@
-# Reusable Go Checks workflow
-# Parallel Go quality checks: vet, staticcheck, golangci-lint, govulncheck, gosec
+# Reusable Go Checks workflow — vet, staticcheck, golangci-lint, govulncheck, gosec (parallel jobs).
+
+# Module paths (workflow env):
+#   GO_VERSION_FILE — go-version-file input when set; else go.mod under working-directory.
+#   GO_CACHE_DEPENDENCY_PATH — matching go.sum path.
 #
-# Resolved paths (see workflow env):
-#   GO_VERSION_FILE — go-version-file input when set; else go.mod at working-directory
-#   GO_CACHE_DEPENDENCY_PATH — go.sum alongside that module
+# Expression syntax (GitHub Actions):
+#   ${{ A && B || C }}              if A then B else C
+#   ${{ format('{0}/go.mod', dir) }}  interpolate dir into a path string
 
 name: Go Checks
 
@@ -11,7 +14,7 @@ on:
   workflow_call:
     inputs:
       go-version-file:
-        description: 'Path to go.mod etc. (default: {working-directory}/go.mod)'
+        description: 'Path to go.mod (default: {working-directory}/go.mod)'
         required: false
         type: string
         default: ''
@@ -122,10 +125,7 @@ jobs:
           go-version-file: ${{ env.GO_VERSION_FILE }}
           cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 
-      # securego/gosec is a Docker action with args only — no working-directory input
-      # and step working-directory does not apply to Docker actions. Package paths
-      # must be repo-root-relative (./... or ./{working-directory}/...), not ./...
-      # with a step working-directory like vet/staticcheck use.
+      # gosec accepts package paths only via args, relative to the repo root.
       - name: Security check
         uses: securego/gosec@v2
         with:

@@ -36,6 +36,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        # Default artifact name to the last segment of main-package (e.g. ./cmd/server → server).
         ARTIFACT_NAME='${{ inputs.artifact-name }}'
         ARTIFACT_NAME="${ARTIFACT_NAME:-$(basename '${{ inputs.main-package }}')}"
         echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
@@ -44,6 +45,7 @@ runs:
       shell: bash
       run: |
         set -euo pipefail
+        # cachekey fingerprints the main package dependency tree (see cachekey/main.go).
         cache_key=$(go run "${{ github.action_path }}/cachekey" --main-package '${{ inputs.main-package }}')
         echo "CACHE_KEY=${cache_key}" >> "$GITHUB_ENV"
 

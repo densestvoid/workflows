@@ -54,6 +54,7 @@ runs:
 
     - name: Delete S3 state file
       shell: bash
+      # Terraform leaves the state object behind after destroy; remove it manually.
       continue-on-error: true
       env:
         AWS_ACCESS_KEY_ID: ${{ inputs.terraform-aws-access-key-id }}

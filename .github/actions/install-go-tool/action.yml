@@ -30,6 +30,7 @@ runs:
           install-go-tool-${{ inputs.tool-package }}-${{ runner.os }}-
 
     - name: Go install
+      # cache-hit is set by actions/cache@v6 restore step above.
       if: steps.cache.outputs.cache-hit != 'true'
       shell: bash
       run: |

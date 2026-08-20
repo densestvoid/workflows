@@ -56,7 +56,7 @@ Secrets live in **each app repo** (repository secrets/variables, or GitHub Envir
 |---------------------|---------|
 | `DO_TOKEN`, `TERRAFORM_AWS_*` | deploy/terminate terraform |
 | `SLACK_WEBHOOK` | notify |
-| `DOCKERHUB_*` | build-docker |
+| `DOCKERHUB_*` (optional) | build-docker |
 | `GITHUB_TOKEN` or PAT | build-docker (GHCR), notify (PR comments) |
 
 ## Typical PR deploy pipeline
@@ -117,7 +117,7 @@ jobs:
           terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
           terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 
-      # Same job as deploy-terraform — state is initialized; terraform CLI on PATH from setup-terraform inside that action.
+      # deploy-terraform leaves terraform on PATH in this job; read outputs here, not in a separate job.
       - name: Read service URL
         id: service-url
         if: steps.deploy-changes.outputs.deployable == 'true' && steps.deploy.outcome == 'success'
@@ -195,15 +195,17 @@ jobs:
 
 **terminate-terraform** applies the app repo empty destroy module (`terraform-dir`), then removes the state file from S3 (`|| true`, same as budget). Module variables via `TF_VAR_*` env on the invoking step. Skip logic for empty state belongs in the caller workflow.
 
-## Caching
+## Caching and skip logic
 
-| Action | Mechanism |
-|--------|-----------|
-| **build-go** | `actions/cache/restore` + `actions/cache/save` on binary; dep-tree key from bundled helper + `GOOS`/`GOARCH` (internal — no output) |
-| **build-docker** | BuildKit GHA cache scoped to `ghcr-image`; skips build when caller-supplied `tag` already exists on GHCR |
+**Skip gates** are caller-owned — use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in workflow `if:` conditions, not workflow trigger `paths` when a required check must still run.
+
+| Action | Caching |
+|--------|---------|
+| **build-go** | `actions/cache/restore` + `save` on the binary; key from bundled dep-tree helper + `GOOS`/`GOARCH` |
+| **build-docker** | BuildKit GHA cache scoped to `ghcr-image` |
 | **install-go-tool** | `actions/cache` on `~/go/bin/<tool>` per package |
 
-Skip logic is caller-owned: use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in workflow `if:` conditions. **build-docker** exposes `image-built` when the registry already had the tag (skip container rollout; infra-only Terraform updates may still apply).
+**build-docker** also skips the build when the caller's `tag` already exists on GHCR (`image-built: false`). Use that to gate container rollout while still applying infra-only Terraform changes.
 
 ## Caller notes
 
@@ -239,20 +241,32 @@ Every action that needs source code checks out the full repo itself. Callers sho
 
 Wraps `docker/setup-buildx-action`, `docker/login-action`, `docker/metadata-action`, and `docker/build-push-action`. **GHCR is required**; Docker Hub is an optional second push. Requires `packages: write` for GHCR.
 
-**Inputs:** `ghcr-image` is the path **without** `ghcr.io/` (e.g. `${{ github.repository }}/my-app`). Pass **`tag`** yourself (e.g. `pr-42-${{ github.sha }}`).
+**Inputs**
 
-**Outputs:**
+| Input | Notes |
+|-------|-------|
+| `ghcr-image` | Path **without** `ghcr.io/` (e.g. `${{ github.repository }}/my-app`) |
+| `tag` | Caller-supplied tag (e.g. `pr-42-${{ github.sha }}`) |
+| `artifacts` | Comma-separated artifact names to download into the build context before build |
+
+When a prior step uploaded a binary artifact, pass its name:
+
+```yaml
+artifacts: ${{ steps.build-go.outputs.artifact-name }}
+```
+
+**Outputs**
 
 | Output | Use |
 |--------|-----|
-| `image-ref` | GHCR reference — pass to `TF_VAR_docker_image_tag` or similar |
-| `image-built` | `false` when GHCR already had the tag — gate container rollout vs infra-only Terraform |
+| `image-ref` | Full GHCR reference — pass to `TF_VAR_docker_image_tag` or similar |
+| `image-built` | `false` when GHCR already had the tag |
 
 Use a PAT when `GITHUB_TOKEN` lacks package scope.
 
 ### Go module layout
 
-**build-go** expects `go.mod` at the repo root. Pass only `main-package`:
+**build-go** expects `go.mod` at the repo root:
 
 ```yaml
 - uses: densestvoid/workflows/.github/actions/build-go@main
@@ -260,7 +274,7 @@ Use a PAT when `GITHUB_TOKEN` lacks package scope.
     main-package: ./cmd/api
 ```
 
-For nested modules (multiple `go.mod` in one repo), pass `working-directory` to **go-checks**:
+**go-checks** supports nested modules via `working-directory`:
 
 ```yaml
 go-checks:
@@ -268,6 +282,8 @@ go-checks:
   with:
     working-directory: backend
 ```
+
+The workflow resolves `backend/go.mod` and `backend/go.sum` automatically. See header comments in `go-checks.yml` for the expression syntax.
 
 ### Terraform
 
@@ -294,22 +310,18 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
     echo "value=${value}" >> "$GITHUB_OUTPUT"
 ```
 
-**deploy-terraform** runs `hashicorp/setup-terraform`, so the CLI stays on PATH for later steps in that job. Do not read outputs in a separate job without re-init.
+**deploy-terraform** runs `hashicorp/setup-terraform`, so `terraform` stays on PATH for later steps in the same job.
 
 ### notify (Slack)
 
-**notify** uses `slackapi/slack-github-action` with inline **`slack-payload`** JSON (`text`, `attachments`, `blocks`, …). Callers build the payload in the workflow (simple `{"text":"..."}` or rich attachments like budget's terminate notifications).
-
-### build-docker artifacts input
-
-When **build-go** runs first, pass `artifacts: ${{ steps.build-go.outputs.artifact-name }}` so the Go binary is downloaded into the Docker context before build. **build-docker** checks out fresh and uses `actions/download-artifact` internally.
+**notify** uses `slackapi/slack-github-action` with inline **`slack-payload`** JSON (`text`, `attachments`, `blocks`, …). Callers build the payload in the workflow.
 
 ## Known limitations (v0)
 
 | Area | Limitation |
 |------|------------|
-| **build-go** | `CGO_ENABLED=0`; default `GOOS=linux` / `GOARCH=amd64` (override via inputs) — cgo packages won't build |
-| **build-docker** | `actions/download-artifact` when `artifacts` is set; skips push when tag already in registry |
+| **build-go** | `CGO_ENABLED=0`; default `GOOS=linux` / `GOARCH=amd64` — cgo packages won't build |
+| **build-docker** | Checks out fresh; downloads `artifacts` when set |
 | **Testing** | No integration tests in this repo — validate via krogerrecipeshopper rollout |
 
 ## Rollout

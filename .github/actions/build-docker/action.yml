@@ -57,6 +57,7 @@ runs:
       if: ${{ inputs.artifacts != '' }}
       uses: actions/download-artifact@v8
       with:
+        # Braces wrap comma-separated names: budget,worker → {budget,worker}
         pattern: ${{ contains(inputs.artifacts, ',') && format('{{{0}}}', inputs.artifacts) || inputs.artifacts }}
         path: ${{ inputs.context-path }}
         merge-multiple: true
@@ -87,6 +88,7 @@ runs:
       run: |
         set -euo pipefail
         ref="ghcr.io/${{ inputs.ghcr-image }}:${{ inputs.tag }}"
+        # imagetools inspect exits non-zero when the tag is absent — that means we should build.
         if docker buildx imagetools inspect "${ref}" >/dev/null 2>&1; then
           echo "Image already in registry: ${ref}"
           echo "exists=true" >> "$GITHUB_OUTPUT"
@@ -100,6 +102,8 @@ runs:
       if: steps.inspect.outputs.exists != 'true'
       uses: docker/metadata-action@v5
       with:
+        # GHCR image always; append Docker Hub image on a second line when set.
+        # format('\n{0}', …) adds a newline before the Docker Hub image name.
         images: ghcr.io/${{ inputs.ghcr-image }}${{ inputs.dockerhub-image != '' && format('\n{0}', inputs.dockerhub-image) || '' }}
         tags: |
           type=raw,value=${{ inputs.tag }}
@@ -123,8 +127,4 @@ runs:
         set -euo pipefail
         ref="ghcr.io/${{ inputs.ghcr-image }}:${{ inputs.tag }}"
         echo "image-ref=${ref}" >> "$GITHUB_OUTPUT"
-        if [ "${{ steps.inspect.outputs.exists }}" = "true" ]; then
-          echo "image-built=false" >> "$GITHUB_OUTPUT"
-        else
-          echo "image-built=true" >> "$GITHUB_OUTPUT"
-        fi
+        echo "image-built=$([ '${{ steps.inspect.outputs.exists }}' = 'true' ] && echo false || echo true)" >> "$GITHUB_OUTPUT"
