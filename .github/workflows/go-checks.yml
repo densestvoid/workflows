@@ -69,7 +69,7 @@ jobs:
           cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 
       - name: Install staticcheck
-        uses: densestvoid/workflows/.github/actions/install-go-tool@main
+        uses: ./.github/actions/install-go-tool
         with:
           tool-package: honnef.co/go/tools/cmd/staticcheck
 
