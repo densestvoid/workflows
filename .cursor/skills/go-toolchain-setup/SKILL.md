@@ -1,19 +1,35 @@
 ---
 name: go-toolchain-setup
 description: >-
-  Sets up Go in GitHub Actions workflows using actions/checkout and
-  actions/setup-go. Use when authoring Go jobs after setup-go was removed from
-  densestvoid/workflows, or when configuring go-checks-style jobs with
-  working-directory and nested go.mod paths.
+  Configures Go in GitHub Actions with actions/checkout and actions/setup-go for
+  densestvoid/workflows. Use when authoring or editing go-checks.yml, adding Go
+  jobs to app repos, handling nested go.mod via working-directory, choosing
+  golangci-lint/govulncheck/gosec/staticcheck, or replacing the removed setup-go
+  composite.
 ---
 
 # Go Toolchain Setup
 
-Use when a workflow job needs Go but should not call the removed `setup-go` composite.
+## When to read this skill
 
-## Standard pattern
+- Adding or editing `.github/workflows/go-checks.yml`
+- Any Go job that needs checkout + toolchain (app repo or this repo)
+- Nested `go.mod` / `working-directory` inputs
+- Choosing which linter/vuln/security action to use
 
-In **go-checks.yml**, Go module path fallbacks are centralized in workflow `env` (`GO_VERSION_FILE`, `GO_CACHE_DEPENDENCY_PATH`) and documented in the workflow header. Reuse that pattern for other reusable workflows with nested modules.
+For toolbox action refs inside reusable workflows, also read [workflows-internal-refs](../workflows-internal-refs/SKILL.md).
+
+## Job step order
+
+Every Go check job follows this order:
+
+1. `- name: Checkout` → `actions/checkout@v7`
+2. `- name: Setup Go` → `actions/setup-go@v7` (from `go.mod` only — no explicit `go-version` input)
+3. Tool step (run, maintainer action, or `./.github/actions/install-go-tool`)
+
+## Path resolution (reusable workflows)
+
+Centralize fallbacks in workflow `env`; document in the workflow header. Canonical: `.github/workflows/go-checks.yml`.
 
 ```yaml
 env:
@@ -25,9 +41,6 @@ env:
     ${{ inputs.working-directory == '.' && 'go.sum'
       || format('{0}/go.sum', inputs.working-directory) }}
 
-- name: Checkout
-  uses: actions/checkout@v7
-
 - name: Setup Go
   uses: actions/setup-go@v7
   with:
@@ -35,21 +48,31 @@ env:
     cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 ```
 
-Resolve version from `go.mod` (or `go-version-file` / `working-directory` inputs). Do not add a separate explicit `go-version` override step.
+Replace `inputs.*` with literals in non-reusable jobs.
 
-Replace `inputs.*` with literals when the job is not a reusable workflow.
+## working-directory by tool type
+
+| Tool | How to scope |
+|------|--------------|
+| `go vet`, `staticcheck` | `defaults.run.working-directory` on job + `./...` in command |
+| `golangci-lint-action` | `with.working-directory` |
+| `govulncheck-action` | `with.work-dir` |
+| `securego/gosec@v2` | Repo-root-relative `args` only (Docker action; no `working-directory` input) — see Security-Check job in go-checks |
 
 ## Tool choice
 
-| Tool | Use |
-|------|-----|
-| `golangci/golangci-lint-action@v6` | golangci-lint (maintainer action) |
-| `golangci/govulncheck-action@v1` | govulncheck |
-| `securego/gosec@v2` | gosec — Docker action; pass repo-root scan path via `args` (see go-checks Security-Check job) |
-| `densestvoid/workflows/.github/actions/install-go-tool` | staticcheck and other tools without maintainer actions |
+| Tool | Action |
+|------|--------|
+| golangci-lint | `golangci/golangci-lint-action@v6` |
+| govulncheck | `golangci/govulncheck-action@v1` |
+| gosec | `securego/gosec@v2` |
+| staticcheck | `./.github/actions/install-go-tool` then `run: staticcheck ./...` |
 
-Run checks with `working-directory:` on `run` steps, or pass `working-directory` / `work-dir` to maintainer actions.
+Do not ad-hoc `go install` per job when **install-go-tool** or a maintainer action exists.
 
-## Reference
+## Anti-patterns
 
-See `.github/workflows/go-checks.yml` in the workflows repo for the canonical multi-job layout.
+- Plain `- uses: actions/checkout@v7` without `- name: Checkout`
+- Dual Setup Go steps (explicit version + go-version-file)
+- `densestvoid/workflows/...@main` for **install-go-tool** inside this repo — use `./.github/actions/install-go-tool`
+- Putting gosec scan paths in shared workflow `env` — keep inline at the gosec step with a comment explaining why
