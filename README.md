@@ -1,4 +1,4 @@
-# DenseVoid Workflows
+# DensestVoid Workflows
 
 Composable GitHub Actions toolbox for CI, build, deploy, and notify.
 
