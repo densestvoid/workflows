@@ -45,7 +45,7 @@ Canonical: `.github/workflows/go-checks.yml` Static-Analysis job.
 | Need | Use | Avoid |
 |------|-----|-------|
 | Path skip gates | `dorny/paths-filter@v3` | Custom git diff; trigger `paths` blocking required CI |
-| Docker build + push | **build-docker** (GHCR required; Docker Hub optional) | Raw buildx/login chain in callers; metadata-action boilerplate |
+| Docker build + push | **build-docker** (GHCR required; Docker Hub optional) | Raw buildx/login/metadata chain in callers; bash config steps for tag lists |
 | Go toolchain | checkout + setup-go — see **go-toolchain-setup** | Removed **setup-go** composite |
 | Go checks | Reusable **go-checks.yml** | Duplicating five parallel jobs in every app |
 | Terraform output (same job) | Inline `terraform output -raw` — see **terraform-output-inline** | Removed **terraform-output** |

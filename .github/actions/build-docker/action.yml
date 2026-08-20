@@ -95,20 +95,14 @@ runs:
           echo "exists=false" >> "$GITHUB_OUTPUT"
         fi
 
-    - name: Resolve push tags
-      id: tags
+    - name: Docker metadata
+      id: meta
       if: steps.inspect.outputs.exists != 'true'
-      shell: bash
-      run: |
-        set -euo pipefail
-        {
-          echo "value<<EOF"
-          echo "ghcr.io/${{ inputs.ghcr-image }}:${{ inputs.tag }}"
-          if [ -n "${{ inputs.dockerhub-image }}" ]; then
-            echo "${{ inputs.dockerhub-image }}:${{ inputs.tag }}"
-          fi
-          echo "EOF"
-        } >> "$GITHUB_OUTPUT"
+      uses: docker/metadata-action@v5
+      with:
+        images: ghcr.io/${{ inputs.ghcr-image }}${{ inputs.dockerhub-image != '' && format('\n{0}', inputs.dockerhub-image) || '' }}
+        tags: |
+          type=raw,value=${{ inputs.tag }}
 
     - name: Build and push
       if: steps.inspect.outputs.exists != 'true'
@@ -117,7 +111,8 @@ runs:
         context: ${{ inputs.context-path }}
         file: ${{ inputs.dockerfile }}
         push: true
-        tags: ${{ steps.tags.outputs.value }}
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
         cache-from: type=gha,scope=${{ inputs.ghcr-image }}
         cache-to: type=gha,scope=${{ inputs.ghcr-image }},mode=max
 

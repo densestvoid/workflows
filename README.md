@@ -237,7 +237,7 @@ Every action that needs source code checks out the full repo itself. Callers sho
 
 ### build-docker
 
-Wraps `docker/setup-buildx-action`, `docker/login-action`, and `docker/build-push-action`. **GHCR is required**; Docker Hub is an optional second push. Requires `packages: write` for GHCR.
+Wraps `docker/setup-buildx-action`, `docker/login-action`, `docker/metadata-action`, and `docker/build-push-action`. **GHCR is required**; Docker Hub is an optional second push. Requires `packages: write` for GHCR.
 
 **Inputs:** `ghcr-image` is the path **without** `ghcr.io/` (e.g. `${{ github.repository }}/my-app`). Pass **`tag`** yourself (e.g. `pr-42-${{ github.sha }}`).
 
