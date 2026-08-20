@@ -13,20 +13,26 @@ Use when a workflow job needs Go but should not call the removed `setup-go` comp
 
 ## Standard pattern
 
+In **go-checks.yml**, path fallbacks are centralized in workflow `env` (`GO_VERSION_FILE`, `GO_CACHE_DEPENDENCY_PATH`, `GOSEC_SCAN_PATH`) and documented in the workflow header. Reuse that pattern for other reusable workflows with nested modules.
+
 ```yaml
+env:
+  GO_VERSION_FILE: >-
+    ${{ inputs.go-version-file != '' && inputs.go-version-file
+      || (inputs.working-directory == '.' && 'go.mod'
+        || format('{0}/go.mod', inputs.working-directory)) }}
+  GO_CACHE_DEPENDENCY_PATH: >-
+    ${{ inputs.working-directory == '.' && 'go.sum'
+      || format('{0}/go.sum', inputs.working-directory) }}
+
 - name: Checkout
   uses: actions/checkout@v7
 
 - name: Setup Go
   uses: actions/setup-go@v7
   with:
-    go-version-file: >-
-      ${{ inputs.go-version-file != '' && inputs.go-version-file
-        || (inputs.working-directory == '.' && 'go.mod'
-          || format('{0}/go.mod', inputs.working-directory)) }}
-    cache-dependency-path: >-
-      ${{ inputs.working-directory == '.' && 'go.sum'
-        || format('{0}/go.sum', inputs.working-directory) }}
+    go-version-file: ${{ env.GO_VERSION_FILE }}
+    cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 ```
 
 Resolve version from `go.mod` (or `go-version-file` / `working-directory` inputs). Do not add a separate explicit `go-version` override step.
@@ -39,7 +45,7 @@ Replace `inputs.*` with literals when the job is not a reusable workflow.
 |------|-----|
 | `golangci/golangci-lint-action@v6` | golangci-lint (maintainer action) |
 | `golangci/govulncheck-action@v1` | govulncheck |
-| `securego/gosec@v2` | gosec (`args: ./...` or `./{dir}/...`) |
+| `securego/gosec@v2` | gosec — Docker action; pass repo-root scan path via `args` (see `GOSEC_SCAN_PATH` in go-checks) |
 | `densestvoid/workflows/.github/actions/install-go-tool` | staticcheck and other tools without maintainer actions |
 
 Run checks with `working-directory:` on `run` steps, or pass `working-directory` / `work-dir` to maintainer actions.

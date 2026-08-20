@@ -1,5 +1,10 @@
 # Reusable Go Checks workflow
 # Parallel Go quality checks: vet, staticcheck, golangci-lint, govulncheck, gosec
+#
+# Resolved paths (see workflow env):
+#   GO_VERSION_FILE — go-version-file input when set; else go.mod at working-directory
+#   GO_CACHE_DEPENDENCY_PATH — go.sum alongside that module
+#   GOSEC_SCAN_PATH — repo-root package pattern for gosec (Docker action has no working-directory input)
 
 name: Go Checks
 
@@ -21,6 +26,18 @@ on:
         description: 'GitHub token for accessing private repositories'
         required: false
 
+env:
+  GO_VERSION_FILE: >-
+    ${{ inputs.go-version-file != '' && inputs.go-version-file
+      || (inputs.working-directory == '.' && 'go.mod'
+        || format('{0}/go.mod', inputs.working-directory)) }}
+  GO_CACHE_DEPENDENCY_PATH: >-
+    ${{ inputs.working-directory == '.' && 'go.sum'
+      || format('{0}/go.sum', inputs.working-directory) }}
+  GOSEC_SCAN_PATH: >-
+    ${{ inputs.working-directory == '.' && './...'
+      || format('./{0}/...', inputs.working-directory) }}
+
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
@@ -28,6 +45,9 @@ concurrency:
 jobs:
   Vet:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -35,20 +55,17 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: >-
-            ${{ inputs.go-version-file != '' && inputs.go-version-file
-              || (inputs.working-directory == '.' && 'go.mod'
-                || format('{0}/go.mod', inputs.working-directory)) }}
-          cache-dependency-path: >-
-            ${{ inputs.working-directory == '.' && 'go.sum'
-              || format('{0}/go.sum', inputs.working-directory) }}
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 
       - name: Vet
         run: go vet ./...
-        working-directory: ${{ inputs.working-directory }}
 
   Static-Analysis:
     runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ inputs.working-directory }}
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -56,13 +73,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: >-
-            ${{ inputs.go-version-file != '' && inputs.go-version-file
-              || (inputs.working-directory == '.' && 'go.mod'
-                || format('{0}/go.mod', inputs.working-directory)) }}
-          cache-dependency-path: >-
-            ${{ inputs.working-directory == '.' && 'go.sum'
-              || format('{0}/go.sum', inputs.working-directory) }}
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 
       - name: Install staticcheck
         uses: densestvoid/workflows/.github/actions/install-go-tool@main
@@ -71,7 +83,6 @@ jobs:
 
       - name: Static analysis
         run: staticcheck ./...
-        working-directory: ${{ inputs.working-directory }}
 
   Lint:
     runs-on: ubuntu-latest
@@ -82,13 +93,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: >-
-            ${{ inputs.go-version-file != '' && inputs.go-version-file
-              || (inputs.working-directory == '.' && 'go.mod'
-                || format('{0}/go.mod', inputs.working-directory)) }}
-          cache-dependency-path: >-
-            ${{ inputs.working-directory == '.' && 'go.sum'
-              || format('{0}/go.sum', inputs.working-directory) }}
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 
       - name: Lint
         uses: golangci/golangci-lint-action@v6
@@ -104,13 +110,8 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: >-
-            ${{ inputs.go-version-file != '' && inputs.go-version-file
-              || (inputs.working-directory == '.' && 'go.mod'
-                || format('{0}/go.mod', inputs.working-directory)) }}
-          cache-dependency-path: >-
-            ${{ inputs.working-directory == '.' && 'go.sum'
-              || format('{0}/go.sum', inputs.working-directory) }}
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 
       - name: Vulnerability check
         uses: golangci/govulncheck-action@v1
@@ -126,17 +127,11 @@ jobs:
       - name: Setup Go
         uses: actions/setup-go@v7
         with:
-          go-version-file: >-
-            ${{ inputs.go-version-file != '' && inputs.go-version-file
-              || (inputs.working-directory == '.' && 'go.mod'
-                || format('{0}/go.mod', inputs.working-directory)) }}
-          cache-dependency-path: >-
-            ${{ inputs.working-directory == '.' && 'go.sum'
-              || format('{0}/go.sum', inputs.working-directory) }}
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 
+      # securego/gosec is a Docker action (args only); paths are repo-root-relative.
       - name: Security check
         uses: securego/gosec@v2
         with:
-          args: >-
-            ${{ inputs.working-directory == '.' && './...'
-              || format('./{0}/...', inputs.working-directory) }}
+          args: ${{ env.GOSEC_SCAN_PATH }}
