@@ -3,8 +3,8 @@ name: write-github-workflows
 description: >-
   Authors and reviews GitHub Actions workflows and composite actions for the
   densestvoid/workflows toolbox. Use when adding or changing .github/workflows,
-  .github/actions, README deploy examples, caller skip logic, or reviewing PRs
-  in this repo.
+  .github/actions, .github/dependabot.yml, README deploy examples, caller skip
+  logic, or reviewing PRs in this repo.
 ---
 
 # Write GitHub Workflows
@@ -65,6 +65,90 @@ Relative `./` paths resolve at the ref the caller pinned on the reusable workflo
 - Inline comments explain non-obvious bash or `${{ }}` syntax, not other actions
 - Reusable workflow headers document expression syntax used in that file
 
+## Dependabot
+
+Dependabot config lives in `.github/dependabot.yml`. Schedule weekly on Monday; group updates so each ecosystem opens one PR per week.
+
+### What Dependabot updates
+
+| `uses:` ref type | Updated by `github-actions` ecosystem? |
+|------------------|----------------------------------------|
+| `actions/*`, `dorny/*`, `hashicorp/*`, maintainer actions | Yes |
+| `densestvoid/workflows/...` (toolbox reusable workflows/actions) | No — bump on toolbox release (`@v1`, `@main`) |
+| `./.github/actions/...` (local composites) | No |
+
+### This repo (workflows toolbox)
+
+Only `github-actions` — no app `gomod`, `docker`, or `terraform` trees to track.
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      github-actions:
+        patterns:
+          - "actions/*"
+```
+
+Narrow the group to `actions/*` so third-party pins (e.g. `dorny/paths-filter`, `golangci/*`) stay in separate PRs and are easier to review.
+
+### App repos (budget pattern)
+
+Full-stack app repos add every ecosystem they ship. Reference: `densestvoid/budget` `.github/dependabot.yml`.
+
+| Ecosystem | `directory` | When to include |
+|-----------|-------------|-----------------|
+| `github-actions` | `/` | Always |
+| `gomod` | `/` (or module root) | Go apps |
+| `docker` | `/` | Dockerfile at repo root |
+| `terraform` | `/terraform/<env>` | One entry per Terraform root (e.g. `pr`, `production`) |
+
+```yaml
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  - package-ecosystem: gomod
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      gomod:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule: { interval: weekly, day: monday }
+    groups:
+      docker:
+        patterns: ["*"]
+
+  - package-ecosystem: terraform
+    directory: /terraform/pr
+    schedule: { interval: weekly, day: monday }
+    groups:
+      terraform:
+        patterns: ["*"]
+```
+
+App repos use `patterns: ["*"]` per ecosystem — one grouped PR for all pins in that ecosystem. Duplicate the `terraform` block for each environment directory.
+
+### Reviewing Dependabot PRs
+
+- **github-actions (workflows repo):** run **go-checks** — version bumps in `go-checks.yml` and composite actions must pass vet/lint/vuln/gosec
+- **github-actions (app repo):** CI must pass; deploy workflows exercise checkout, paths-filter, and artifact actions
+- **gomod / docker / terraform:** CI plus any deploy-path filters that watch `go.mod`, `Dockerfile`, or `terraform/**`
+- **Toolbox pins:** when cutting `@v1`, update app repos manually — Dependabot will not bump `densestvoid/workflows@...`
+
 ## Review checklist
 
 - [ ] Skip gates use `dorny/paths-filter`
@@ -72,3 +156,4 @@ Relative `./` paths resolve at the ref the caller pinned on the reusable workflo
 - [ ] Internal reusable-workflow refs use `./.github/actions/...`
 - [ ] Comments and docs stay scoped to the file they are in
 - [ ] README example matches current action inputs
+- [ ] Dependabot: correct ecosystems per repo type; toolbox refs excluded from auto-bump
