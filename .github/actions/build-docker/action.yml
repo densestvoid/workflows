@@ -1,0 +1,130 @@
+name: 'Build Docker'
+description: >-
+  Build and push a Docker image to GHCR via official Docker actions. Optionally
+  pushes the same tag to Docker Hub. Skips build when the GHCR tag already
+  exists (imagetools inspect). Outputs image-ref and image-built.
+inputs:
+  context-path:
+    description: 'Docker build context path'
+    required: false
+    default: '.'
+  dockerfile:
+    description: 'Dockerfile path'
+    required: false
+    default: 'Dockerfile'
+  artifacts:
+    description: 'Comma-separated workflow artifact names to download into context-path before build (e.g. budget,worker)'
+    required: false
+    default: ''
+  tag:
+    description: 'Image tag (without registry prefix)'
+    required: true
+  ghcr-image:
+    description: 'GHCR image path without ghcr.io/ prefix (e.g. owner/repo/app)'
+    required: true
+  ghcr-username:
+    description: 'GHCR username'
+    required: true
+  ghcr-password:
+    description: 'GHCR password or token'
+    required: true
+  dockerhub-image:
+    description: 'Optional Docker Hub image (e.g. user/app)'
+    required: false
+    default: ''
+  dockerhub-username:
+    description: 'Docker Hub username (required when dockerhub-image is set)'
+    required: false
+    default: ''
+  dockerhub-password:
+    description: 'Docker Hub password or token (required when dockerhub-image is set)'
+    required: false
+    default: ''
+outputs:
+  image-ref:
+    description: 'GHCR image reference with tag'
+    value: ${{ steps.result.outputs.image-ref }}
+  image-built:
+    description: 'true when build-push ran; false when GHCR already had the tag'
+    value: ${{ steps.result.outputs.image-built }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout Docker context
+      uses: actions/checkout@v7
+
+    - name: Download input artifacts
+      if: ${{ inputs.artifacts != '' }}
+      uses: actions/download-artifact@v8
+      with:
+        # Braces wrap comma-separated names: budget,worker → {budget,worker}
+        pattern: ${{ contains(inputs.artifacts, ',') && format('{{{0}}}', inputs.artifacts) || inputs.artifacts }}
+        path: ${{ inputs.context-path }}
+        merge-multiple: true
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v4
+
+    - name: Login to GHCR
+      uses: docker/login-action@v4
+      with:
+        registry: ghcr.io
+        username: ${{ inputs.ghcr-username }}
+        password: ${{ inputs.ghcr-password }}
+
+    - name: Login to Docker Hub
+      if: >-
+        inputs.dockerhub-image != '' &&
+        inputs.dockerhub-username != '' &&
+        inputs.dockerhub-password != ''
+      uses: docker/login-action@v4
+      with:
+        username: ${{ inputs.dockerhub-username }}
+        password: ${{ inputs.dockerhub-password }}
+
+    - name: Check if image exists
+      id: inspect
+      shell: bash
+      run: |
+        set -euo pipefail
+        ref="ghcr.io/${{ inputs.ghcr-image }}:${{ inputs.tag }}"
+        # imagetools inspect exits non-zero when the tag is absent — that means we should build.
+        if docker buildx imagetools inspect "${ref}" >/dev/null 2>&1; then
+          echo "Image already in registry: ${ref}"
+          echo "exists=true" >> "$GITHUB_OUTPUT"
+        else
+          echo "Image not found — build required: ${ref}"
+          echo "exists=false" >> "$GITHUB_OUTPUT"
+        fi
+
+    - name: Docker metadata
+      id: meta
+      if: steps.inspect.outputs.exists != 'true'
+      uses: docker/metadata-action@v5
+      with:
+        # GHCR image always; append Docker Hub image on a second line when set.
+        # format('\n{0}', …) adds a newline before the Docker Hub image name.
+        images: ghcr.io/${{ inputs.ghcr-image }}${{ inputs.dockerhub-image != '' && format('\n{0}', inputs.dockerhub-image) || '' }}
+        tags: |
+          type=raw,value=${{ inputs.tag }}
+
+    - name: Build and push
+      if: steps.inspect.outputs.exists != 'true'
+      uses: docker/build-push-action@v6
+      with:
+        context: ${{ inputs.context-path }}
+        file: ${{ inputs.dockerfile }}
+        push: true
+        tags: ${{ steps.meta.outputs.tags }}
+        labels: ${{ steps.meta.outputs.labels }}
+        cache-from: type=gha,scope=${{ inputs.ghcr-image }}
+        cache-to: type=gha,scope=${{ inputs.ghcr-image }},mode=max
+
+    - name: Set outputs
+      id: result
+      shell: bash
+      run: |
+        set -euo pipefail
+        ref="ghcr.io/${{ inputs.ghcr-image }}:${{ inputs.tag }}"
+        echo "image-ref=${ref}" >> "$GITHUB_OUTPUT"
+        echo "image-built=$([ '${{ steps.inspect.outputs.exists }}' = 'true' ] && echo false || echo true)" >> "$GITHUB_OUTPUT"

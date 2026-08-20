@@ -1,18 +1,20 @@
-# Reusable Go Checks workflow
-# This workflow performs comprehensive Go code quality checks including vet, static analysis, linting, vulnerability checks, and security checks
+# Reusable Go Checks workflow — vet, staticcheck, golangci-lint, govulncheck, gosec (parallel jobs).
+
+# Module paths (workflow env):
+#   GO_VERSION_FILE — go-version-file input when set; else go.mod under working-directory.
+#   GO_CACHE_DEPENDENCY_PATH — matching go.sum path.
+#
+# Expression syntax (GitHub Actions):
+#   ${{ A && B || C }}              if A then B else C
+#   ${{ format('{0}/go.mod', dir) }}  interpolate dir into a path string
 
 name: Go Checks
 
 on:
   workflow_call:
     inputs:
-      go-version:
-        description: 'Explicit Go version (overrides go-version-file when set)'
-        required: false
-        type: string
-        default: ''
       go-version-file:
-        description: 'Path to go.mod etc. (default: {working-directory}/go.mod)'
+        description: 'Path to go.mod (default: {working-directory}/go.mod)'
         required: false
         type: string
         default: ''
@@ -21,10 +23,15 @@ on:
         required: false
         type: string
         default: '.'
-    secrets:
-      github-token:
-        description: 'GitHub token for accessing private repositories'
-        required: false
+
+env:
+  GO_VERSION_FILE: >-
+    ${{ inputs.go-version-file != '' && inputs.go-version-file
+      || (inputs.working-directory == '.' && 'go.mod'
+        || format('{0}/go.mod', inputs.working-directory)) }}
+  GO_CACHE_DEPENDENCY_PATH: >-
+    ${{ inputs.working-directory == '.' && 'go.sum'
+      || format('{0}/go.sum', inputs.working-directory) }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -33,95 +40,95 @@ concurrency:
 jobs:
   Vet:
     runs-on: ubuntu-latest
-    steps:
-    - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup@main
-      with:
-        go-version: ${{ inputs.go-version }}
-        go-version-file: ${{ inputs.go-version-file }}
+    defaults:
+      run:
         working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
 
-    - name: Vet
-      run: go vet ./...
-      working-directory: ${{ inputs.working-directory }}
-      continue-on-error: false
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
+
+      - name: Vet
+        run: go vet ./...
 
   Static-Analysis:
     runs-on: ubuntu-latest
-    steps:
-    - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup@main
-      with:
-        go-version: ${{ inputs.go-version }}
-        go-version-file: ${{ inputs.go-version-file }}
+    defaults:
+      run:
         working-directory: ${{ inputs.working-directory }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
 
-    - name: Install staticcheck
-      uses: densestvoid/workflows/.github/actions/install-tool@main
-      with:
-        tool-package: honnef.co/go/tools/cmd/staticcheck
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 
-    - name: Static analysis
-      run: staticcheck ./...
-      working-directory: ${{ inputs.working-directory }}
-      continue-on-error: false
+      - name: Install staticcheck
+        uses: ./.github/actions/install-go-tool
+        with:
+          tool-package: honnef.co/go/tools/cmd/staticcheck
+
+      - name: Static analysis
+        run: staticcheck ./...
 
   Lint:
     runs-on: ubuntu-latest
     steps:
-    - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup@main
-      with:
-        go-version: ${{ inputs.go-version }}
-        go-version-file: ${{ inputs.go-version-file }}
-        working-directory: ${{ inputs.working-directory }}
+      - name: Checkout
+        uses: actions/checkout@v7
 
-    - name: Install golangci-lint
-      uses: densestvoid/workflows/.github/actions/install-tool@main
-      with:
-        tool-package: github.com/golangci/golangci-lint/cmd/golangci-lint
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 
-    - name: Lint
-      run: golangci-lint run ./...
-      working-directory: ${{ inputs.working-directory }}
-      continue-on-error: false
+      - name: Lint
+        uses: golangci/golangci-lint-action@v6
+        with:
+          working-directory: ${{ inputs.working-directory }}
 
   Vulnerability-Check:
     runs-on: ubuntu-latest
     steps:
-    - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup@main
-      with:
-        go-version: ${{ inputs.go-version }}
-        go-version-file: ${{ inputs.go-version-file }}
-        working-directory: ${{ inputs.working-directory }}
+      - name: Checkout
+        uses: actions/checkout@v7
 
-    - name: Install govulncheck
-      uses: densestvoid/workflows/.github/actions/install-tool@main
-      with:
-        tool-package: golang.org/x/vuln/cmd/govulncheck
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 
-    - name: Vulnerability check
-      run: govulncheck ./...
-      working-directory: ${{ inputs.working-directory }}
-      continue-on-error: false
+      - name: Vulnerability check
+        uses: golangci/govulncheck-action@v1
+        with:
+          work-dir: ${{ inputs.working-directory }}
 
   Security-Check:
     runs-on: ubuntu-latest
     steps:
-    - name: Setup
-      uses: densestvoid/workflows/.github/actions/setup@main
-      with:
-        go-version: ${{ inputs.go-version }}
-        go-version-file: ${{ inputs.go-version-file }}
-        working-directory: ${{ inputs.working-directory }}
+      - name: Checkout
+        uses: actions/checkout@v7
 
-    - name: Install gosec
-      uses: densestvoid/workflows/.github/actions/install-tool@main
-      with:
-        tool-package: github.com/securego/gosec/v2/cmd/gosec
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+          cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 
-    - name: Security check
-      run: gosec ./...
-      working-directory: ${{ inputs.working-directory }}
-      continue-on-error: false
+      # gosec accepts package paths only via args, relative to the repo root.
+      - name: Security check
+        uses: securego/gosec@v2
+        with:
+          args: >-
+            ${{ inputs.working-directory == '.' && './...'
+              || format('./{0}/...', inputs.working-directory) }}

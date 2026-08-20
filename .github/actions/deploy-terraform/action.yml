@@ -1,0 +1,49 @@
+name: 'Deploy Terraform'
+description: >-
+  Terraform init and apply. Pass Terraform variables via TF_VAR_* env on the
+  invoking workflow step (e.g. TF_VAR_do_token). AWS S3 backend settings are
+  action inputs.
+inputs:
+  terraform-dir:
+    description: 'Path to Terraform root module in the caller repo'
+    required: true
+  backend-key:
+    description: 'S3 state key'
+    required: true
+  terraform-aws-access-key-id:
+    description: 'S3 backend access key ID (passed to terraform init -backend-config)'
+    required: true
+  terraform-aws-secret-access-key:
+    description: 'S3 backend secret access key (passed to terraform init -backend-config)'
+    required: true
+  terraform-aws-region:
+    description: 'S3 backend region (passed to terraform init -backend-config)'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_wrapper: false
+
+    - name: Terraform init
+      shell: bash
+      working-directory: ${{ inputs.terraform-dir }}
+      run: |
+        set -euo pipefail
+        terraform init \
+          -backend-config="key=${{ inputs.backend-key }}" \
+          -backend-config="region=${{ inputs.terraform-aws-region }}" \
+          -backend-config="access_key=${{ inputs.terraform-aws-access-key-id }}" \
+          -backend-config="secret_key=${{ inputs.terraform-aws-secret-access-key }}"
+
+    - name: Terraform apply
+      shell: bash
+      working-directory: ${{ inputs.terraform-dir }}
+      run: |
+        set -euo pipefail
+        terraform apply -auto-approve

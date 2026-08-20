@@ -1,0 +1,63 @@
+name: 'Terminate Terraform'
+description: >-
+  Destroy resources from state using the caller repo empty destroy module, then
+  delete the S3 state file with the AWS CLI (Terraform empties state but does
+  not remove the remote object). Pass Terraform variables via TF_VAR_* env on the
+  invoking workflow step. AWS credentials are action inputs.
+inputs:
+  terraform-dir:
+    description: 'Path to the app repo empty destroy root module (same backend key as deploy)'
+    required: true
+  backend-key:
+    description: 'S3 state key'
+    required: true
+  terraform-s3-bucket:
+    description: 'S3 state bucket (state file deleted via aws s3 rm after apply)'
+    required: true
+  terraform-aws-access-key-id:
+    description: 'AWS access key ID (terraform init -backend-config and aws s3 rm)'
+    required: true
+  terraform-aws-secret-access-key:
+    description: 'AWS secret access key (terraform init -backend-config and aws s3 rm)'
+    required: true
+  terraform-aws-region:
+    description: 'AWS region (terraform init -backend-config and aws s3 rm)'
+    required: true
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout repository
+      uses: actions/checkout@v7
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_wrapper: false
+
+    - name: Terraform init
+      shell: bash
+      working-directory: ${{ inputs.terraform-dir }}
+      run: |
+        set -euo pipefail
+        terraform init \
+          -backend-config="key=${{ inputs.backend-key }}" \
+          -backend-config="region=${{ inputs.terraform-aws-region }}" \
+          -backend-config="access_key=${{ inputs.terraform-aws-access-key-id }}" \
+          -backend-config="secret_key=${{ inputs.terraform-aws-secret-access-key }}"
+
+    - name: Terraform apply
+      shell: bash
+      working-directory: ${{ inputs.terraform-dir }}
+      run: |
+        set -euo pipefail
+        terraform apply -auto-approve
+
+    - name: Delete S3 state file
+      shell: bash
+      # Terraform leaves the state object behind after destroy; remove it manually.
+      continue-on-error: true
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.terraform-aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.terraform-aws-secret-access-key }}
+        AWS_DEFAULT_REGION: ${{ inputs.terraform-aws-region }}
+      run: aws s3 rm "s3://${{ inputs.terraform-s3-bucket }}/${{ inputs.backend-key }}"

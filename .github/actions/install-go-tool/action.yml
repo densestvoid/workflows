@@ -1,0 +1,40 @@
+name: 'Install and Cache Go Tool'
+description: 'Install and cache a Go CLI tool'
+inputs:
+  tool-package:
+    description: 'Go package path for the tool'
+    required: true
+  tool-version:
+    description: 'Version of the tool to install (e.g., latest, v1.0.0)'
+    required: false
+    default: 'latest'
+runs:
+  using: 'composite'
+  steps:
+    - name: Resolve tool
+      id: tool
+      shell: bash
+      run: |
+        set -euo pipefail
+        TOOL_NAME=$(basename "${{ inputs.tool-package }}")
+        echo "name=${TOOL_NAME}" >> "$GITHUB_OUTPUT"
+        echo "path=${HOME}/go/bin/${TOOL_NAME}" >> "$GITHUB_OUTPUT"
+
+    - name: Cache tool
+      id: cache
+      uses: actions/cache@v6
+      with:
+        path: ${{ steps.tool.outputs.path }}
+        key: install-go-tool-${{ inputs.tool-package }}-${{ inputs.tool-version }}-${{ runner.os }}
+        restore-keys: |
+          install-go-tool-${{ inputs.tool-package }}-${{ runner.os }}-
+
+    - name: Go install
+      # cache-hit is set by actions/cache@v6 restore step above.
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: |
+        set -euo pipefail
+        TOOL_PATH="${{ steps.tool.outputs.path }}"
+        mkdir -p "$(dirname "$TOOL_PATH")"
+        GOBIN="$(dirname "$TOOL_PATH")" go install "${{ inputs.tool-package }}@${{ inputs.tool-version }}"

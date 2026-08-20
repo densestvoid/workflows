@@ -1,0 +1,48 @@
+name: 'Notify'
+description: 'Post Slack notification (inline JSON payload) and/or PR comment'
+inputs:
+  slack-webhook:
+    description: 'Slack incoming webhook URL'
+    required: false
+    default: ''
+  slack-payload:
+    description: 'Slack incoming-webhook JSON payload (text, attachments, blocks, etc.)'
+    required: false
+    default: ''
+  pr-number:
+    description: 'PR/issue number for comment'
+    required: false
+    default: ''
+  pr-body:
+    description: 'Markdown body for PR comment'
+    required: false
+    default: ''
+  github-token:
+    description: 'Token for PR comment API'
+    required: false
+    default: ${{ github.token }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Comment on PR
+      if: always() && inputs.pr-number != '' && inputs.pr-body != ''
+      uses: actions/github-script@v9
+      with:
+        github-token: ${{ inputs.github-token }}
+        script: |
+          const prNumber = parseInt('${{ inputs.pr-number }}', 10);
+          const body = ${{ toJSON(inputs.pr-body) }};
+          await github.rest.issues.createComment({
+            owner: context.repo.owner,
+            repo: context.repo.repo,
+            issue_number: prNumber,
+            body
+          });
+
+    - name: Send Slack notification
+      if: always() && inputs.slack-webhook != '' && inputs.slack-payload != ''
+      uses: slackapi/slack-github-action@v4.0.0
+      with:
+        webhook-type: incoming-webhook
+        webhook: ${{ inputs.slack-webhook }}
+        payload: ${{ inputs.slack-payload }}

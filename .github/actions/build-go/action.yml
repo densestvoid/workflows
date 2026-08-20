@@ -1,0 +1,76 @@
+name: 'Build Go'
+description: 'Build one Go binary and upload as artifact (cached internally)'
+inputs:
+  main-package:
+    description: 'Package path to build (e.g. ./cmd/server)'
+    required: true
+  artifact-name:
+    description: 'Artifact name and binary filename at repo root (default: basename of main-package; no path separators)'
+    required: false
+    default: ''
+  goos:
+    description: 'GOOS for go build'
+    required: false
+    default: 'linux'
+  goarch:
+    description: 'GOARCH for go build'
+    required: false
+    default: 'amd64'
+outputs:
+  artifact-name:
+    description: 'Artifact name for downstream download'
+    value: ${{ env.ARTIFACT_NAME }}
+runs:
+  using: 'composite'
+  steps:
+    - name: Checkout Go sources
+      uses: actions/checkout@v7
+
+    - name: Setup Go
+      uses: actions/setup-go@v7
+      with:
+        go-version-file: go.mod
+        cache-dependency-path: go.sum
+
+    - name: Resolve artifact name
+      shell: bash
+      run: |
+        set -euo pipefail
+        # Default artifact name to the last segment of main-package (e.g. ./cmd/server → server).
+        ARTIFACT_NAME='${{ inputs.artifact-name }}'
+        ARTIFACT_NAME="${ARTIFACT_NAME:-$(basename '${{ inputs.main-package }}')}"
+        echo "ARTIFACT_NAME=${ARTIFACT_NAME}" >> "$GITHUB_ENV"
+
+    - name: Compute cache key
+      shell: bash
+      run: |
+        set -euo pipefail
+        # cachekey fingerprints the main package dependency tree (see cachekey/main.go).
+        cache_key=$(go run "${{ github.action_path }}/cachekey" --main-package '${{ inputs.main-package }}')
+        echo "CACHE_KEY=${cache_key}" >> "$GITHUB_ENV"
+
+    - name: Restore binary cache
+      id: cache
+      uses: actions/cache/restore@v6
+      with:
+        path: ${{ env.ARTIFACT_NAME }}
+        key: build-go-${{ env.CACHE_KEY }}-${{ inputs.goos }}-${{ inputs.goarch }}
+
+    - name: Build binary
+      if: steps.cache.outputs.cache-hit != 'true'
+      shell: bash
+      run: CGO_ENABLED=0 GOOS=${{ inputs.goos }} GOARCH=${{ inputs.goarch }} go build -o "${{ env.ARTIFACT_NAME }}" '${{ inputs.main-package }}'
+
+    - name: Save binary cache
+      if: steps.cache.outputs.cache-hit != 'true'
+      uses: actions/cache/save@v6
+      with:
+        path: ${{ env.ARTIFACT_NAME }}
+        key: build-go-${{ env.CACHE_KEY }}-${{ inputs.goos }}-${{ inputs.goarch }}
+
+    - name: Upload binary artifact
+      uses: actions/upload-artifact@v7
+      with:
+        name: ${{ env.ARTIFACT_NAME }}
+        path: ${{ env.ARTIFACT_NAME }}
+        if-no-files-found: error
