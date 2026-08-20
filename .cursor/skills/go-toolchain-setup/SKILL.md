@@ -13,7 +13,7 @@ Use when a workflow job needs Go but should not call the removed `setup-go` comp
 
 ## Standard pattern
 
-In **go-checks.yml**, path fallbacks are centralized in workflow `env` (`GO_VERSION_FILE`, `GO_CACHE_DEPENDENCY_PATH`, `GOSEC_SCAN_PATH`) and documented in the workflow header. Reuse that pattern for other reusable workflows with nested modules.
+In **go-checks.yml**, Go module path fallbacks are centralized in workflow `env` (`GO_VERSION_FILE`, `GO_CACHE_DEPENDENCY_PATH`) and documented in the workflow header. Reuse that pattern for other reusable workflows with nested modules.
 
 ```yaml
 env:
@@ -45,7 +45,7 @@ Replace `inputs.*` with literals when the job is not a reusable workflow.
 |------|-----|
 | `golangci/golangci-lint-action@v6` | golangci-lint (maintainer action) |
 | `golangci/govulncheck-action@v1` | govulncheck |
-| `securego/gosec@v2` | gosec — Docker action; pass repo-root scan path via `args` (see `GOSEC_SCAN_PATH` in go-checks) |
+| `securego/gosec@v2` | gosec — Docker action; pass repo-root scan path via `args` (see go-checks Security-Check job) |
 | `densestvoid/workflows/.github/actions/install-go-tool` | staticcheck and other tools without maintainer actions |
 
 Run checks with `working-directory:` on `run` steps, or pass `working-directory` / `work-dir` to maintainer actions.

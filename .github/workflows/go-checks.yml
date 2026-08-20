@@ -4,7 +4,6 @@
 # Resolved paths (see workflow env):
 #   GO_VERSION_FILE — go-version-file input when set; else go.mod at working-directory
 #   GO_CACHE_DEPENDENCY_PATH — go.sum alongside that module
-#   GOSEC_SCAN_PATH — repo-root package pattern for gosec (Docker action has no working-directory input)
 
 name: Go Checks
 
@@ -34,9 +33,6 @@ env:
   GO_CACHE_DEPENDENCY_PATH: >-
     ${{ inputs.working-directory == '.' && 'go.sum'
       || format('{0}/go.sum', inputs.working-directory) }}
-  GOSEC_SCAN_PATH: >-
-    ${{ inputs.working-directory == '.' && './...'
-      || format('./{0}/...', inputs.working-directory) }}
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -130,8 +126,13 @@ jobs:
           go-version-file: ${{ env.GO_VERSION_FILE }}
           cache-dependency-path: ${{ env.GO_CACHE_DEPENDENCY_PATH }}
 
-      # securego/gosec is a Docker action (args only); paths are repo-root-relative.
+      # securego/gosec is a Docker action with args only — no working-directory input
+      # and step working-directory does not apply to Docker actions. Package paths
+      # must be repo-root-relative (./... or ./{working-directory}/...), not ./...
+      # with a step working-directory like vet/staticcheck use.
       - name: Security check
         uses: securego/gosec@v2
         with:
-          args: ${{ env.GOSEC_SCAN_PATH }}
+          args: >-
+            ${{ inputs.working-directory == '.' && './...'
+              || format('./{0}/...', inputs.working-directory) }}
