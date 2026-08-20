@@ -28,6 +28,7 @@ Pair with [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in the c
 | [terminate-terraform](.github/actions/terminate-terraform) | Empty destroy module + S3 state delete (`terraform-dir`, `TF_VAR_*` env) |
 | [notify](.github/actions/notify) | Slack (inline JSON payload) + PR comment |
 | [install-go-tool](.github/actions/install-go-tool) | Install + cache a Go CLI tool (`~/go/bin/<tool>`) |
+| [actionlint](.github/actions/actionlint) | Download [rhysd/actionlint](https://github.com/rhysd/actionlint) and lint workflow files |
 
 ## Versioning
 
@@ -138,7 +139,7 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-### CI skip (Go Checks)
+### CI skip (Go Checks + Actionlint)
 
 Use in-job path filters — not workflow trigger `paths` — so a required aggregation job (e.g. `ci`) can still run on docs-only PRs.
 
@@ -148,12 +149,13 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       go: ${{ steps.filter.outputs.go }}
+      workflows: ${{ steps.filter.outputs.workflows }}
     steps:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
 
-      - uses: dorny/paths-filter@v3
+      - uses: dorny/paths-filter@v4
         id: filter
         with:
           filters: |
@@ -161,18 +163,29 @@ jobs:
               - '**/*.go'
               - 'go.mod'
               - 'go.sum'
+            workflows:
+              - '.github/workflows/**'
+              - '.github/actions/**'
 
   go-checks:
     needs: changes
     if: needs.changes.outputs.go == 'true'
     uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
 
+  actionlint:
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: densestvoid/workflows/.github/actions/actionlint@main
+
   ci:
-    needs: [changes, go-checks]
+    needs: [changes, go-checks, actionlint]
     if: >-
       always() &&
       needs.changes.result == 'success' &&
-      (needs.go-checks.result == 'success' || needs.go-checks.result == 'skipped')
+      (needs.go-checks.result == 'success' || needs.go-checks.result == 'skipped') &&
+      (needs.actionlint.result == 'success' || needs.actionlint.result == 'skipped')
     runs-on: ubuntu-latest
     steps:
       - run: echo "CI passed"
@@ -234,7 +247,7 @@ Every action that needs source code checks out the full repo itself. Callers sho
 
 | Action | Checkout |
 |--------|----------|
-| build-go, build-docker, deploy-terraform, terminate-terraform | Full repo |
+| build-go, build-docker, deploy-terraform, terminate-terraform, actionlint | Full repo |
 | notify | None (uses github-script; optional checkout in caller) |
 
 ### build-docker
@@ -337,8 +350,11 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
 
 ```
 .github/
-├── workflows/go-checks.yml
+├── workflows/
+│   ├── go-checks.yml
+│   └── ci.yml                   # toolbox self-CI (actionlint + aggregation)
 ├── actions/
+│   ├── actionlint/
 │   ├── install-go-tool/
 │   ├── build-go/
 │   │   └── cachekey/            # bundled Go helper for dep-tree fingerprint

@@ -4,7 +4,7 @@ description: >-
   Authors and reviews GitHub Actions workflows and composite actions for the
   densestvoid/workflows toolbox. Use when adding or changing .github/workflows,
   .github/actions, .github/dependabot.yml, README deploy examples, caller skip
-  logic, or reviewing PRs in this repo.
+  logic, actionlint CI gates, or reviewing PRs in this repo.
 ---
 
 # Write GitHub Workflows
@@ -17,19 +17,25 @@ description: >-
 | Read Terraform output after deploy | [terraform-output-inline](terraform-output-inline/SKILL.md) |
 | Everything else in this repo | This skill |
 
+## Version pins
+
+When authoring or editing workflow YAML, pin the **latest release tag** for every third-party action. Do not hardcode stale major-only pins from examples; look up current latest at authoring time. Dependabot bumps third-party `uses:` tags afterward.
+
+**actionlint binary:** the **actionlint** composite downloads via the upstream script from `rhysd/actionlint` `main` (latest release). Do not pin the binary version — Dependabot cannot maintain a curl/script pin.
+
 ## Internal action refs (this repo only)
 
 | Context | Pattern |
 |---------|---------|
-| Caller repo invokes toolbox | `densestvoid/workflows/.github/workflows/go-checks.yml@v1` |
-| Reusable workflow invokes sibling action | `./.github/actions/install-go-tool` |
+| Caller repo invokes toolbox | `densestvoid/workflows/.github/workflows/go-checks.yml@<tag>` or `densestvoid/workflows/.github/actions/<name>@<tag>` |
+| This repo invokes sibling action / workflow | `$/.github/actions/<name>` or `$/.github/workflows/<file>` |
 
-Relative `./` paths resolve at the ref the caller pinned on the reusable workflow.
+`$/` resolves to the repository of the running workflow/action at that commit (requires runner ≥ 2.336.0). No checkout needed to resolve the action. Do **not** use `./.github/actions/...` — that path resolves in the **workspace** checkout (and in reusable workflows, the **caller** checkout), so it breaks for consumer repos and needs a prior checkout even in this repo.
 
 ## Design principles
 
 1. **Toolbox, not orchestration** — app repos own triggers, job graphs, `needs:`, and skip gates
-2. **Caller-owned skip** — `dorny/paths-filter@v3` in workflow `if:`, not trigger `paths` when required checks must still run
+2. **Caller-owned skip** — `dorny/paths-filter` (latest release) in workflow `if:`, not trigger `paths` when required checks must still run
 3. **Atomic actions** — one concern per composite; delegate to official/maintainer actions inside
 4. **TF_VAR_*** — Terraform module variables via env on the invoking step
 5. **Encapsulated internals** — cache keys and registry inspect logic stay inside actions
@@ -38,12 +44,13 @@ Relative `./` paths resolve at the ref the caller pinned on the reusable workflo
 
 | Need | Use | Avoid |
 |------|-----|-------|
-| Path skip gates | `dorny/paths-filter@v3` | Custom git diff; trigger `paths` blocking required CI |
+| Path skip gates | `dorny/paths-filter` (latest release) | Custom git diff; trigger `paths` blocking required CI |
+| Workflow / action YAML lint | **actionlint** composite | Manual curl in every app; Marketplace actionlint wrappers |
 | Docker build + push | **build-docker** | Raw buildx/login/metadata chain in callers |
 | Go toolchain | checkout + setup-go | Removed **setup-go** composite |
 | Go checks | Reusable **go-checks.yml** | Duplicating five parallel jobs |
 | Terraform output (same job) | Inline `terraform output -raw` | Removed **terraform-output** |
-| Internal refs in reusable workflows | `./.github/actions/...` | `@main` self-references in this repo |
+| Internal same-repo refs | `$/.github/actions/...` | `./.github/actions/...` (workspace/caller checkout); `@main` self-references in this repo |
 | Slack + PR notify | **notify** | Duplicate slack + github-script |
 | Deploy / destroy | **deploy-terraform** / **terminate-terraform** | Inline init/apply/s3 rm |
 
@@ -57,7 +64,54 @@ Relative `./` paths resolve at the ref the caller pinned on the reusable workflo
 | **terminate-terraform** | destroy module + S3 state delete |
 | **notify** | Slack + PR comment |
 | **install-go-tool** | Cached `go install` |
+| **actionlint** | Download rhysd/actionlint + lint workflows |
 | **go-checks.yml** | Parallel vet/staticcheck/lint/vuln/gosec |
+
+## Actionlint CI (this repo + app repos)
+
+Gate merges on workflow/action syntax. Use the **actionlint** composite with caller-owned `dorny/paths-filter` on `.github/workflows/**` and `.github/actions/**`, plus a required aggregation job so docs-only PRs still get a green required check.
+
+**This toolbox repo** — `.github/workflows/ci.yml` (`$/.github/actions/actionlint`).
+
+**App repos** — same skip graph as go-checks:
+
+```yaml
+jobs:
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      workflows: ${{ steps.filter.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@<latest>
+        with:
+          fetch-depth: 0
+      - uses: dorny/paths-filter@<latest>
+        id: filter
+        with:
+          filters: |
+            workflows:
+              - '.github/workflows/**'
+              - '.github/actions/**'
+
+  actionlint:
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: densestvoid/workflows/.github/actions/actionlint@<toolbox-pin>
+
+  ci:
+    needs: [changes, actionlint]
+    if: >-
+      always() &&
+      needs.changes.result == 'success' &&
+      (needs.actionlint.result == 'success' || needs.actionlint.result == 'skipped')
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "CI passed"
+```
+
+When authoring or reviewing app CI: if the repo has `.github/workflows` or `.github/actions`, ensure **actionlint** is in the required `ci` graph (not only go-checks).
 
 ## Documentation conventions
 
@@ -76,6 +130,8 @@ Dependabot config lives in `.github/dependabot.yml`. Schedule weekly on Monday. 
 | `actions/*`, `dorny/*`, `hashicorp/*`, maintainer actions | Yes — `github-actions` group |
 | `densestvoid/workflows/...` (toolbox reusable workflows/actions) | Yes — separate `workflows-toolbox` group |
 | `./.github/actions/...` (local composites) | No |
+| `$/.github/actions/...` (self-repo at running commit) | No — inherits the reusable workflow pin |
+| actionlint binary (curl download script) | No — intentionally floats with upstream `main` script |
 
 ### This repo (workflows toolbox)
 
@@ -169,16 +225,18 @@ Reference: `densestvoid/budget` `.github/dependabot.yml` (single root `gomod`/`d
 
 ### Reviewing Dependabot PRs
 
-- **github-actions (workflows repo):** run **go-checks** — all pin bumps land in one grouped PR
+- **github-actions (workflows repo):** run **actionlint** / **ci** — all pin bumps land in one grouped PR
 - **workflows-toolbox (app repo):** CI must pass; verify every `densestvoid/workflows@...` pin moved together (reusable workflow + action refs at the same tag)
 - **github-actions (app repo):** CI and deploy workflows exercise checkout, paths-filter, and artifact actions
 - **gomod / docker / terraform:** scoped CI for that root; deploy-path filters that watch `go.mod`, `Dockerfile`, or `terraform/**`
 
 ## Review checklist
 
-- [ ] Skip gates use `dorny/paths-filter`
+- [ ] Skip gates use `dorny/paths-filter` (latest release)
+- [ ] App / toolbox CI includes **actionlint** gated on `.github/workflows/**` and `.github/actions/**` with a required aggregation job
 - [ ] Go jobs: named Checkout + Setup Go from go-version-file only
-- [ ] Internal reusable-workflow refs use `./.github/actions/...`
+- [ ] Third-party actions pin latest release tags (not stale majors / invalid bare tags)
+- [ ] Same-repo sibling refs use `$/.github/actions/...` (not `./`)
 - [ ] Comments and docs stay scoped to the file they are in
 - [ ] README example matches current action inputs
 - [ ] Dependabot: workflows repo groups all `github-actions` with `*`; app repos split `workflows-toolbox` from third-party pins and use one entry per `go.mod`, Dockerfile, and terraform root
