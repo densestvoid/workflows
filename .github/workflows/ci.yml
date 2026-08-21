@@ -1,5 +1,4 @@
-# CI for this toolbox repo — actionlint when workflow or action files change.
-# Caller-owned skip via paths-filter so a required `ci` job still reports on unrelated PRs.
+# Branch protection: require job ci.
 
 name: CI
 
@@ -35,10 +34,10 @@ jobs:
 
   ci:
     needs: [changes, actionlint]
-    if: >-
-      always() &&
-      needs.changes.result == 'success' &&
-      (needs.actionlint.result == 'success' || needs.actionlint.result == 'skipped')
+    if: always()
     runs-on: ubuntu-latest
     steps:
-      - run: echo "CI passed"
+      - uses: re-actors/alls-green@v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
+          allowed-skips: actionlint

@@ -139,56 +139,48 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-### CI skip (Go Checks + Actionlint)
+### CI
 
-Use in-job path filters — not workflow trigger `paths` — so a required aggregation job (e.g. `ci`) can still run on docs-only PRs.
+Each repo owns one **`ci.yml`**: `changes` + conditional check jobs + aggregate job **`ci`**. Gate with **[re-actors/alls-green](https://github.com/re-actors/alls-green)** — pass `jobs: ${{ toJSON(needs) }}` and list path-filtered check jobs in **`allowed-skips`**. Branch protection requires job **`ci`** only. See `.cursor/skills/ci-playbooks/SKILL.md`.
+
+**This repo** (actionlint only):
 
 ```yaml
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      go: ${{ steps.filter.outputs.go }}
-      workflows: ${{ steps.filter.outputs.workflows }}
+  changes: { ... paths-filter ... }
+  actionlint:
+    needs: changes
+    if: needs.changes.outputs.workflows == 'true'
     steps:
-      - uses: actions/checkout@v7
+      - uses: $/.github/actions/actionlint
+  ci:
+    needs: [changes, actionlint]
+    if: always()
+    steps:
+      - uses: re-actors/alls-green@v1.2.2
         with:
-          fetch-depth: 0
+          jobs: ${{ toJSON(needs) }}
+          allowed-skips: actionlint
+```
 
-      - uses: dorny/paths-filter@v4
-        id: filter
-        with:
-          filters: |
-            go:
-              - '**/*.go'
-              - 'go.mod'
-              - 'go.sum'
-            workflows:
-              - '.github/workflows/**'
-              - '.github/actions/**'
+**App repo** — add check jobs your repo needs; list them all in **`ci`** `needs`:
 
+```yaml
+jobs:
+  changes: { ... paths-filter for go + workflows ... }
+  actionlint: { ... }
   go-checks:
     needs: changes
     if: needs.changes.outputs.go == 'true'
     uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
-
-  actionlint:
-    needs: changes
-    if: needs.changes.outputs.workflows == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: densestvoid/workflows/.github/actions/actionlint@main
-
   ci:
-    needs: [changes, go-checks, actionlint]
-    if: >-
-      always() &&
-      needs.changes.result == 'success' &&
-      (needs.go-checks.result == 'success' || needs.go-checks.result == 'skipped') &&
-      (needs.actionlint.result == 'success' || needs.actionlint.result == 'skipped')
-    runs-on: ubuntu-latest
+    needs: [changes, actionlint, go-checks]
+    if: always()
     steps:
-      - run: echo "CI passed"
+      - uses: re-actors/alls-green@v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
+          allowed-skips: actionlint, go-checks
 ```
 
 ### PR terminate
@@ -210,7 +202,7 @@ jobs:
 
 ## Caching and skip logic
 
-**Skip gates** are caller-owned — use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in workflow `if:` conditions, not workflow trigger `paths` when a required check must still run.
+**Deploy skip gates** are caller-owned — use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in deploy workflow `if:` conditions, not workflow trigger `paths`. CI path filters live in each repo's **`ci.yml`** `changes` job (see CI section above).
 
 | Action | Caching |
 |--------|---------|
@@ -352,7 +344,7 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
 .github/
 ├── workflows/
 │   ├── go-checks.yml
-│   └── ci.yml                   # toolbox self-CI (actionlint + aggregation)
+│   └── ci.yml                   # changes + actionlint + ci aggregate
 ├── actions/
 │   ├── actionlint/
 │   ├── install-go-tool/
@@ -366,6 +358,8 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
 .cursor/
 └── skills/
     ├── write-github-workflows/   # hub for toolbox authoring
+    ├── ci-playbooks/             # repo CI layout (ci.yml + alls-green)
+    ├── dependabot-workflows/
     ├── go-toolchain-setup/
     └── terraform-output-inline/
 ```
