@@ -37,4 +37,7 @@ jobs:
     if: always()
     runs-on: ubuntu-latest
     steps:
-      - uses: $/.github/actions/ci-aggregate
+      - uses: re-actors/alls-green@v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
+          allowed-skips: actionlint

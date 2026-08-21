@@ -46,9 +46,10 @@ When authoring or editing workflow YAML, pin the **latest release tag** for ever
 
 | Need | Use | Avoid |
 |------|-----|-------|
-| CI layout | Repo **ci.yml** + **ci-aggregate** — see [ci-playbooks](ci-playbooks/SKILL.md) | Local `workflow_call` CI composables; hand-rolled gate expressions |
+| CI layout | Repo **ci.yml** + **re-actors/alls-green** — see [ci-playbooks](ci-playbooks/SKILL.md) | Local `workflow_call` CI composables; custom aggregate composites |
 | Path skip gates (deploy) | `dorny/paths-filter` (latest release) | Custom git diff; trigger `paths` blocking required CI |
 | Workflow / action YAML lint | **actionlint** composite | Manual curl in every app; Marketplace actionlint wrappers |
+| CI job aggregation | **re-actors/alls-green** (latest release) | Custom bash/`contains(needs.*.result)` gate composites |
 | Docker build + push | **build-docker** | Raw buildx/login/metadata chain in callers |
 | Go toolchain | checkout + setup-go | Removed **setup-go** composite |
 | Go checks | Reusable **go-checks.yml** | Duplicating five parallel jobs |
@@ -68,7 +69,6 @@ When authoring or editing workflow YAML, pin the **latest release tag** for ever
 | **notify** | Slack + PR comment |
 | **install-go-tool** | Cached `go install` |
 | **actionlint** | Download rhysd/actionlint + lint workflows |
-| **ci-aggregate** | Fail **`ci`** when any needed job failed/cancelled |
 | **go-checks.yml** | Parallel vet/staticcheck/lint/vuln/gosec |
 
 ## Documentation conventions

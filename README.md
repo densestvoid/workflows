@@ -141,7 +141,7 @@ jobs:
 
 ### CI
 
-Each repo owns one **`ci.yml`**: `changes` + conditional check jobs + aggregate job **`ci`**. Use toolbox **`ci-aggregate`** for the gate — loops `needs.*.result`, fails on failure/cancelled, accepts success/skipped. Branch protection requires job **`ci`** only. See `.cursor/skills/ci-playbooks/SKILL.md`.
+Each repo owns one **`ci.yml`**: `changes` + conditional check jobs + aggregate job **`ci`**. Gate with **[re-actors/alls-green](https://github.com/re-actors/alls-green)** — pass `jobs: ${{ toJSON(needs) }}` and list path-filtered check jobs in **`allowed-skips`**. Branch protection requires job **`ci`** only. See `.cursor/skills/ci-playbooks/SKILL.md`.
 
 **This repo** (actionlint only):
 
@@ -157,7 +157,10 @@ jobs:
     needs: [changes, actionlint]
     if: always()
     steps:
-      - uses: $/.github/actions/ci-aggregate
+      - uses: re-actors/alls-green@v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
+          allowed-skips: actionlint
 ```
 
 **App repo** — add check jobs your repo needs; list them all in **`ci`** `needs`:
@@ -174,7 +177,10 @@ jobs:
     needs: [changes, actionlint, go-checks]
     if: always()
     steps:
-      - uses: densestvoid/workflows/.github/actions/ci-aggregate@main
+      - uses: re-actors/alls-green@v1.2.2
+        with:
+          jobs: ${{ toJSON(needs) }}
+          allowed-skips: actionlint, go-checks
 ```
 
 ### PR terminate
@@ -341,7 +347,6 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
 │   └── ci.yml                   # changes + actionlint + ci aggregate
 ├── actions/
 │   ├── actionlint/
-│   ├── ci-aggregate/
 │   ├── install-go-tool/
 │   ├── build-go/
 │   │   └── cachekey/            # bundled Go helper for dep-tree fingerprint
@@ -353,7 +358,7 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
 .cursor/
 └── skills/
     ├── write-github-workflows/   # hub for toolbox authoring
-    ├── ci-playbooks/             # repo CI layout (ci.yml + ci-aggregate)
+    ├── ci-playbooks/             # repo CI layout (ci.yml + alls-green)
     ├── dependabot-workflows/
     ├── go-toolchain-setup/
     └── terraform-output-inline/
