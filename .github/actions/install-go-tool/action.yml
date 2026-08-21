@@ -1,13 +1,17 @@
 name: 'Install and Cache Go Tool'
-description: 'Install and cache a Go CLI tool'
+description: 'Install and cache a Go CLI tool from the consumer module tool block'
 inputs:
   tool-package:
     description: 'Go package path for the tool'
     required: true
-  tool-version:
-    description: 'Version of the tool to install (e.g., latest, v1.0.0)'
+  working-directory:
+    description: 'Module directory containing go.mod (for bare go install)'
     required: false
-    default: 'latest'
+    default: '.'
+  cache-dependency-path:
+    description: 'go.sum path used in the cache key'
+    required: false
+    default: 'go.sum'
 runs:
   using: 'composite'
   steps:
@@ -25,16 +29,18 @@ runs:
       uses: actions/cache@v6
       with:
         path: ${{ steps.tool.outputs.path }}
-        key: install-go-tool-${{ inputs.tool-package }}-${{ inputs.tool-version }}-${{ runner.os }}
+        key: install-go-tool-${{ inputs.tool-package }}-${{ hashFiles(inputs.cache-dependency-path) }}-${{ runner.os }}
         restore-keys: |
           install-go-tool-${{ inputs.tool-package }}-${{ runner.os }}-
 
     - name: Go install
       # cache-hit is set by actions/cache@v6 restore step above.
+      # Bare go install (no @version) uses the consumer go.mod tool block.
       if: steps.cache.outputs.cache-hit != 'true'
+      working-directory: ${{ inputs.working-directory }}
       shell: bash
       run: |
         set -euo pipefail
         TOOL_PATH="${{ steps.tool.outputs.path }}"
         mkdir -p "$(dirname "$TOOL_PATH")"
-        GOBIN="$(dirname "$TOOL_PATH")" go install "${{ inputs.tool-package }}@${{ inputs.tool-version }}"
+        GOBIN="$(dirname "$TOOL_PATH")" go install "${{ inputs.tool-package }}"
