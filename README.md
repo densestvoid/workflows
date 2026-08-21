@@ -139,11 +139,28 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-### CI skip (Go Checks + Actionlint)
+### CI (composable workflow)
 
-Use in-job path filters — not workflow trigger `paths` — so a required aggregation job (e.g. `ci`) can still run on docs-only PRs.
+Each repo owns **`ci.yml`** (triggers + one job) and **`ci-checks.yml`** (repo-specific checks). Official CI calls the composable via `$/.github/workflows/ci-checks.yml`. Branch protection requires job **`ci`** only — no gate job. See `.cursor/skills/ci-playbooks/SKILL.md`.
+
+**This repo** (actionlint only):
 
 ```yaml
+# ci.yml
+jobs:
+  ci:
+    uses: $/.github/workflows/ci-checks.yml
+```
+
+**App repo** — add checks your repo needs in `ci-checks.yml` (actionlint, go-checks, …); compose from toolbox atoms:
+
+```yaml
+# ci.yml
+jobs:
+  ci:
+    uses: $/.github/workflows/ci-checks.yml
+
+# ci-checks.yml (in app repo — not from toolbox)
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -154,7 +171,6 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 0
-
       - uses: dorny/paths-filter@v4
         id: filter
         with:
@@ -167,11 +183,6 @@ jobs:
               - '.github/workflows/**'
               - '.github/actions/**'
 
-  go-checks:
-    needs: changes
-    if: needs.changes.outputs.go == 'true'
-    uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
-
   actionlint:
     needs: changes
     if: needs.changes.outputs.workflows == 'true'
@@ -179,16 +190,10 @@ jobs:
     steps:
       - uses: densestvoid/workflows/.github/actions/actionlint@main
 
-  ci:
-    needs: [changes, go-checks, actionlint]
-    if: >-
-      always() &&
-      needs.changes.result == 'success' &&
-      (needs.go-checks.result == 'success' || needs.go-checks.result == 'skipped') &&
-      (needs.actionlint.result == 'success' || needs.actionlint.result == 'skipped')
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "CI passed"
+  go-checks:
+    needs: changes
+    if: needs.changes.outputs.go == 'true'
+    uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
 ```
 
 ### PR terminate
@@ -210,7 +215,7 @@ jobs:
 
 ## Caching and skip logic
 
-**Skip gates** are caller-owned — use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in workflow `if:` conditions, not workflow trigger `paths` when a required check must still run.
+**Deploy skip gates** are caller-owned — use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in deploy workflow `if:` conditions, not workflow trigger `paths`. CI path filters live in each repo's composable **`ci-checks.yml`** (see CI section above).
 
 | Action | Caching |
 |--------|---------|
@@ -352,7 +357,8 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
 .github/
 ├── workflows/
 │   ├── go-checks.yml
-│   └── ci.yml                   # toolbox self-CI (actionlint + aggregation)
+│   ├── ci-checks.yml            # repo-specific composable CI (actionlint)
+│   └── ci.yml                   # triggers + one job → ci-checks.yml
 ├── actions/
 │   ├── actionlint/
 │   ├── install-go-tool/
@@ -366,6 +372,8 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
 .cursor/
 └── skills/
     ├── write-github-workflows/   # hub for toolbox authoring
+    ├── ci-playbooks/             # repo CI layout (ci.yml + ci-checks.yml)
+    ├── dependabot-workflows/
     ├── go-toolchain-setup/
     └── terraform-output-inline/
 ```
