@@ -14,17 +14,19 @@ description: >-
 - Adding or editing `.github/workflows/go-checks.yml`
 - Any Go job that needs checkout + toolchain
 - Nested `go.mod` / `working-directory` inputs
-- Choosing which linter/vuln/security action to use
+- Choosing how to install linter/vuln/security tools
 
 ## Version pins
 
-When writing workflow YAML, look up and pin the **latest release tag** for every third-party action (checkout, setup-go, golangci-lint, govulncheck, gosec, paths-filter, etc.). Do not copy stale `@vN` examples from docs or this skill — resolve current latest at authoring time. Dependabot can bump pins afterward.
+When writing workflow YAML, look up and pin the **latest release tag** for every third-party action (checkout, setup-go, paths-filter, etc.). Do not copy stale `@vN` examples from docs or this skill — resolve current latest at authoring time. Dependabot can bump pins afterward.
+
+Go CLI tools (staticcheck, golangci-lint, govulncheck, gosec) are **not** pinned in this toolbox — consumers declare them in a `go.mod` `tool` block; **install-go-tool** runs bare `go install <pkg>` so module-selected versions apply.
 
 ## Job step order
 
 1. `- name: Checkout` → `actions/checkout` (latest release)
 2. `- name: Setup Go` → `actions/setup-go` (latest release; from `go.mod` only)
-3. Tool step (run, maintainer action, or `$/.github/actions/install-go-tool`)
+3. Tool step → `$/.github/actions/install-go-tool` then `run:` the binary
 
 ## Path resolution (reusable workflows)
 
@@ -53,21 +55,19 @@ env:
 
 | Tool | Input |
 |------|-------|
-| `go vet`, `staticcheck` | `defaults.run.working-directory` on the job |
-| `golangci-lint-action` | `with.working-directory` |
-| `govulncheck-action` | `with.work-dir` |
-| `securego/gosec` | `with.args` — repo-root package path (e.g. `./backend/...`) |
+| `go vet`, `staticcheck`, `golangci-lint`, `govulncheck`, `gosec` | `defaults.run.working-directory` on the job |
+| `install-go-tool` | `with.working-directory` + `with.cache-dependency-path` (pass workflow env paths) |
 
 ## Tool choice
 
 | Tool | Action |
 |------|--------|
-| golangci-lint | `golangci/golangci-lint-action` — set `install-mode: goinstall` so lint is built with the `setup-go` toolchain (needed when consumer `go.mod` targets a newer Go than the action’s prebuilt binary) |
-| govulncheck | `golang/govulncheck-action` |
-| gosec | `securego/gosec` |
-| staticcheck | `$/.github/actions/install-go-tool` |
+| staticcheck | `$/.github/actions/install-go-tool` + `staticcheck ./...` |
+| golangci-lint | `$/.github/actions/install-go-tool` + `golangci-lint run ./...` |
+| govulncheck | `$/.github/actions/install-go-tool` + `govulncheck ./...` |
+| gosec | `$/.github/actions/install-go-tool` + `gosec ./...` |
 
-Use maintainer actions or **install-go-tool** — do not ad-hoc `go install` per job.
+Use **install-go-tool** — do not ad-hoc `go install` per job, and do not use maintainer actions that float tool versions (`@latest` / unpinned goinstall).
 
 ## Anti-patterns
 
@@ -75,3 +75,5 @@ Use maintainer actions or **install-go-tool** — do not ad-hoc `go install` per
 - Dual Setup Go steps (explicit version + go-version-file)
 - `densestvoid/workflows/...@main` for **install-go-tool** inside this repo
 - `./.github/actions/...` for same-repo actions — resolves in the workspace (and in reusable workflows, the **caller** checkout); use `$/.github/actions/...` instead
+- `go install <pkg>@latest` (or any `@version` in **install-go-tool**) — ignores the consumer `tool` block
+- `golangci-lint-action` / `govulncheck-action` / `securego/gosec` for go-checks — they do not read the consumer `tool` block

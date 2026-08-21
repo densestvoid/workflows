@@ -216,7 +216,7 @@ jobs:
 |--------|---------|
 | **build-go** | `actions/cache/restore` + `save` on the binary; key from bundled dep-tree helper + `GOOS`/`GOARCH` |
 | **build-docker** | BuildKit GHA cache scoped to `ghcr-image` |
-| **install-go-tool** | `actions/cache` on `~/go/bin/<tool>` per package |
+| **install-go-tool** | `actions/cache` on `~/go/bin/<tool>` per package; key includes `go.sum` hash; bare `go install` (consumer `tool` block) |
 
 **build-docker** also skips the build when the caller's `tag` already exists on GHCR (`image-built: false`). Use that to gate container rollout while still applying infra-only Terraform changes.
 
