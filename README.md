@@ -139,61 +139,42 @@ jobs:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 ```
 
-### CI (composable workflow)
+### CI
 
-Each repo owns **`ci.yml`** (triggers + one job) and **`ci-checks.yml`** (repo-specific checks). Official CI calls the composable via `$/.github/workflows/ci-checks.yml`. Branch protection requires job **`ci`** only — no gate job. See `.cursor/skills/ci-playbooks/SKILL.md`.
+Each repo owns one **`ci.yml`**: `changes` + conditional check jobs + aggregate job **`ci`**. Use toolbox **`ci-aggregate`** for the gate — loops `needs.*.result`, fails on failure/cancelled, accepts success/skipped. Branch protection requires job **`ci`** only. See `.cursor/skills/ci-playbooks/SKILL.md`.
 
 **This repo** (actionlint only):
 
 ```yaml
-# ci.yml
 jobs:
-  ci:
-    uses: $/.github/workflows/ci-checks.yml
-```
-
-**App repo** — add checks your repo needs in `ci-checks.yml` (actionlint, go-checks, …); compose from toolbox atoms:
-
-```yaml
-# ci.yml
-jobs:
-  ci:
-    uses: $/.github/workflows/ci-checks.yml
-
-# ci-checks.yml (in app repo — not from toolbox)
-jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      go: ${{ steps.filter.outputs.go }}
-      workflows: ${{ steps.filter.outputs.workflows }}
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: dorny/paths-filter@v4
-        id: filter
-        with:
-          filters: |
-            go:
-              - '**/*.go'
-              - 'go.mod'
-              - 'go.sum'
-            workflows:
-              - '.github/workflows/**'
-              - '.github/actions/**'
-
+  changes: { ... paths-filter ... }
   actionlint:
     needs: changes
     if: needs.changes.outputs.workflows == 'true'
-    runs-on: ubuntu-latest
     steps:
-      - uses: densestvoid/workflows/.github/actions/actionlint@main
+      - uses: $/.github/actions/actionlint
+  ci:
+    needs: [changes, actionlint]
+    if: always()
+    steps:
+      - uses: $/.github/actions/ci-aggregate
+```
 
+**App repo** — add check jobs your repo needs; list them all in **`ci`** `needs`:
+
+```yaml
+jobs:
+  changes: { ... paths-filter for go + workflows ... }
+  actionlint: { ... }
   go-checks:
     needs: changes
     if: needs.changes.outputs.go == 'true'
     uses: densestvoid/workflows/.github/workflows/go-checks.yml@main
+  ci:
+    needs: [changes, actionlint, go-checks]
+    if: always()
+    steps:
+      - uses: densestvoid/workflows/.github/actions/ci-aggregate@main
 ```
 
 ### PR terminate
@@ -215,7 +196,7 @@ jobs:
 
 ## Caching and skip logic
 
-**Deploy skip gates** are caller-owned — use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in deploy workflow `if:` conditions, not workflow trigger `paths`. CI path filters live in each repo's composable **`ci-checks.yml`** (see CI section above).
+**Deploy skip gates** are caller-owned — use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in deploy workflow `if:` conditions, not workflow trigger `paths`. CI path filters live in each repo's **`ci.yml`** `changes` job (see CI section above).
 
 | Action | Caching |
 |--------|---------|
@@ -357,10 +338,10 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
 .github/
 ├── workflows/
 │   ├── go-checks.yml
-│   ├── ci-checks.yml            # repo-specific composable CI (actionlint)
-│   └── ci.yml                   # triggers + one job → ci-checks.yml
+│   └── ci.yml                   # changes + actionlint + ci aggregate
 ├── actions/
 │   ├── actionlint/
+│   ├── ci-aggregate/
 │   ├── install-go-tool/
 │   ├── build-go/
 │   │   └── cachekey/            # bundled Go helper for dep-tree fingerprint
@@ -372,7 +353,7 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
 .cursor/
 └── skills/
     ├── write-github-workflows/   # hub for toolbox authoring
-    ├── ci-playbooks/             # repo CI layout (ci.yml + ci-checks.yml)
+    ├── ci-playbooks/             # repo CI layout (ci.yml + ci-aggregate)
     ├── dependabot-workflows/
     ├── go-toolchain-setup/
     └── terraform-output-inline/

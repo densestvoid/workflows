@@ -1,61 +1,58 @@
 ---
 name: ci-playbooks
 description: >-
-  Prescribes repo-specific composable CI workflows — gating, parallel checks, no
-  gate job; official ci.yml calls one local workflow so branch protection requires
-  job ci only. Use when authoring ci.yml, ci-checks.yml, branch protection, or
-  reviewing CI in any repo.
+  Prescribes repo CI in one ci.yml — path filters, parallel conditional checks,
+  ci-aggregate gate job; branch protection requires job ci only. Use when
+  authoring ci.yml, branch protection, or reviewing CI in any repo.
 ---
 
 # CI Playbooks
 
 ## Playbook
 
-Each repo owns two workflow files:
+Each repo owns **`ci.yml`** — triggers, a **`changes`** job, conditional check jobs, and a final **`ci`** aggregate job.
 
-| File | Role |
-|------|------|
-| **`ci.yml`** | Triggers only (`pull_request`, `push` to `main`) + **one job** `ci` |
-| **`ci-checks.yml`** | Repo-specific composable (`workflow_call`) — path filters + parallel conditional check jobs |
+| Job | Role |
+|-----|------|
+| **`changes`** | checkout + `dorny/paths-filter`; job `outputs` re-export each filter name |
+| **Check jobs** | `needs: changes`; `if: needs.changes.outputs.<filter> == 'true'`; call toolbox atoms |
+| **`ci`** | `needs: [changes, …]`; `if: always()`; **`ci-aggregate`** composite |
 
-Official `ci.yml`:
+Do **not** split CI into a local `workflow_call` composable — reusable workflows only expose sub-job checks (`ci / changes`, …), not a single merge check named **`ci`**.
+
+## Branch protection
+
+Require job **`ci`** only. The aggregate job is a real top-level job; skipped check jobs do not block merge.
+
+## Layout
+
+1. **`changes`** — checkout + `dorny/paths-filter`; job `outputs` re-export each filter name (required — step outputs are not visible across jobs)
+2. **Check jobs** — `needs: changes`; `if: needs.changes.outputs.<filter> == 'true'` (paths-filter emits string `'true'` / `'false'`); call toolbox atoms
+3. **`ci`** — list every check job in `needs`; `if: always()`; one step: **`ci-aggregate`**
 
 ```yaml
+  ci:
+    needs: [changes, actionlint]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: densestvoid/workflows/.github/actions/ci-aggregate@<toolbox-pin>
+```
+
+**ci-aggregate** loops `needs.*.result` — fails on `failure` or `cancelled`; `success` and `skipped` pass. No inputs; add new check jobs to `needs` only.
+
+This repo: `changes` + `actionlint` only. See [`.github/workflows/ci.yml`](../../.github/workflows/ci.yml).
+
+## App repo example
+
+```yaml
+# ci.yml (in app repo)
 name: CI
 on:
   pull_request:
   push:
     branches: [main]
 
-jobs:
-  ci:
-    uses: $/.github/workflows/ci-checks.yml
-```
-
-Composable `ci-checks.yml` is **not** shared from the toolbox. List only checks this repo needs; compose from toolbox atoms (`actionlint`, `go-checks.yml`, …).
-
-## Branch protection
-
-Require job **`ci`** only (the caller job name). Failures in composable check jobs propagate to **`ci`**. Do not require sub-job names or a synthetic gate job.
-
-## Composable layout
-
-1. **`changes`** — checkout + `dorny/paths-filter`; job `outputs` re-export each filter name (required — step outputs are not visible across jobs)
-2. **Check jobs** — `needs: changes`; `if: needs.changes.outputs.<filter> == 'true'` (paths-filter emits string `'true'` / `'false'`); call toolbox atoms
-3. **No gate job** — no `always()` aggregation, no `echo "CI passed"`
-
-This repo uses one check job; app repos add more parallel jobs (go-checks, …) sharing the same `changes` job.
-
-Pass/fail: failing check → composable run fails → caller **`ci`** fails. Docs-only PR: check jobs skipped, **`ci`** green.
-
-## This repo (workflows toolbox)
-
-Same split layout as app repos — `changes` + `actionlint` only. See [`.github/workflows/ci-checks.yml`](../../.github/workflows/ci-checks.yml).
-
-## App repo example
-
-```yaml
-# ci-checks.yml (in app repo)
 jobs:
   changes:
     runs-on: ubuntu-latest
@@ -89,21 +86,29 @@ jobs:
     needs: changes
     if: needs.changes.outputs.go == 'true'
     uses: densestvoid/workflows/.github/workflows/go-checks.yml@<toolbox-pin>
+
+  ci:
+    needs: [changes, actionlint, go-checks]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: densestvoid/workflows/.github/actions/ci-aggregate@<toolbox-pin>
 ```
+
+Same-repo refs in this toolbox repo: `$/.github/actions/ci-aggregate`.
 
 ## Anti-patterns
 
-- Shared CI workflow or action published from toolbox for all repos
-- Internal or caller gate job (`always()` + `echo "CI passed"`)
-- Orchestration in official `ci.yml` (`changes`, conditional sub-jobs)
-- `./.github/...` same-repo refs — use `$/.github/...`
+- Local **`ci-checks.yml`** `workflow_call` for merge gating (sub-jobs become separate required checks)
+- Shared CI workflow published from toolbox for all repos
+- Long hand-written `always()` + `needs.*.result` expressions — use **ci-aggregate**
 - Trigger `paths` when required CI must still report
-- Duplicating check steps in official `ci.yml`
+- `./.github/...` same-repo refs — use `$/.github/...`
 
 ## Review checklist
 
-- [ ] Official `ci.yml` is triggers + one job `ci` → `$/.github/workflows/ci-checks.yml`
-- [ ] Composable lists only this repo's checks; no gate job
-- [ ] Path filters in composable `changes`, not trigger `paths`
+- [ ] Single **`ci.yml`** with `changes`, conditional checks, and **`ci`** aggregate job
+- [ ] **`ci`** `needs` lists every check job; **`ci-aggregate`** is the only aggregation step
+- [ ] Path filters in **`changes`**, not trigger `paths`
 - [ ] Branch protection requires **`ci`** only
-- [ ] Toolbox atoms pinned at `<toolbox-pin>` in app composables
+- [ ] Toolbox atoms pinned at `<toolbox-pin>`

@@ -1,0 +1,17 @@
+name: 'CI aggregate'
+description: 'Fail when any needed job failed or was cancelled; success and skipped are OK'
+runs:
+  using: 'composite'
+  steps:
+    - name: Aggregate
+      shell: bash
+      run: |
+        for result in ${{ join(needs.*.result, ' ') }}; do
+          case "$result" in
+            success|skipped) ;;
+            *)
+              echo "::error::Needed job result was $result"
+              exit 1
+              ;;
+          esac
+        done

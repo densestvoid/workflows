@@ -13,7 +13,7 @@ description: >-
 
 | Task | Skill |
 |------|-------|
-| CI layout, ci.yml, ci-checks.yml, branch protection | [ci-playbooks](ci-playbooks/SKILL.md) |
+| CI layout, ci.yml, branch protection | [ci-playbooks](ci-playbooks/SKILL.md) |
 | Dependabot config and PR review | [dependabot-workflows](dependabot-workflows/SKILL.md) |
 | Go jobs, go-checks, nested go.mod | [go-toolchain-setup](go-toolchain-setup/SKILL.md) |
 | Read Terraform output after deploy | [terraform-output-inline](terraform-output-inline/SKILL.md) |
@@ -36,7 +36,7 @@ When authoring or editing workflow YAML, pin the **latest release tag** for ever
 
 ## Design principles
 
-1. **Toolbox, not orchestration** — app repos own deploy triggers and job graphs; CI orchestration lives in each repo's [ci-checks.yml](ci-playbooks/SKILL.md)
+1. **Toolbox, not orchestration** — app repos own deploy triggers and job graphs; CI orchestration lives in each repo's [ci.yml](ci-playbooks/SKILL.md)
 2. **Deploy skip in caller** — `dorny/paths-filter` (latest release) in deploy workflow `if:`, not trigger `paths` when required checks must still run
 3. **Atomic actions** — one concern per composite; delegate to official/maintainer actions inside
 4. **TF_VAR_*** — Terraform module variables via env on the invoking step
@@ -46,7 +46,7 @@ When authoring or editing workflow YAML, pin the **latest release tag** for ever
 
 | Need | Use | Avoid |
 |------|-----|-------|
-| CI layout | Repo-specific **ci-checks.yml** — see [ci-playbooks](ci-playbooks/SKILL.md) | Shared toolbox CI workflow; caller gate jobs |
+| CI layout | Repo **ci.yml** + **ci-aggregate** — see [ci-playbooks](ci-playbooks/SKILL.md) | Local `workflow_call` CI composables; hand-rolled gate expressions |
 | Path skip gates (deploy) | `dorny/paths-filter` (latest release) | Custom git diff; trigger `paths` blocking required CI |
 | Workflow / action YAML lint | **actionlint** composite | Manual curl in every app; Marketplace actionlint wrappers |
 | Docker build + push | **build-docker** | Raw buildx/login/metadata chain in callers |
@@ -68,6 +68,7 @@ When authoring or editing workflow YAML, pin the **latest release tag** for ever
 | **notify** | Slack + PR comment |
 | **install-go-tool** | Cached `go install` |
 | **actionlint** | Download rhysd/actionlint + lint workflows |
+| **ci-aggregate** | Fail **`ci`** when any needed job failed/cancelled |
 | **go-checks.yml** | Parallel vet/staticcheck/lint/vuln/gosec |
 
 ## Documentation conventions
