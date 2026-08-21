@@ -1,5 +1,5 @@
-# CI for this toolbox repo — actionlint when workflow or action files change.
-# Caller-owned skip via paths-filter so a required `ci` job still reports on unrelated PRs.
+# Official CI — triggers only; composable checks live in ci-checks.yml.
+# Branch protection: require job ci.
 
 name: CI
 
@@ -9,36 +9,5 @@ on:
     branches: [main]
 
 jobs:
-  changes:
-    runs-on: ubuntu-latest
-    outputs:
-      workflows: ${{ steps.filter.outputs.workflows }}
-    steps:
-      - uses: actions/checkout@v7.0.1
-        with:
-          fetch-depth: 0
-
-      - uses: dorny/paths-filter@v4.0.3
-        id: filter
-        with:
-          filters: |
-            workflows:
-              - '.github/workflows/**'
-              - '.github/actions/**'
-
-  actionlint:
-    needs: changes
-    if: needs.changes.outputs.workflows == 'true'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: $/.github/actions/actionlint
-
   ci:
-    needs: [changes, actionlint]
-    if: >-
-      always() &&
-      needs.changes.result == 'success' &&
-      (needs.actionlint.result == 'success' || needs.actionlint.result == 'skipped')
-    runs-on: ubuntu-latest
-    steps:
-      - run: echo "CI passed"
+    uses: $/.github/workflows/ci-checks.yml
