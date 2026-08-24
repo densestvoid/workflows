@@ -1,12 +1,12 @@
 ---
-name: tailnet-hub-spoke
+name: tailnet-vpc-peering
 description: >-
   Hub-and-spoke VPC peering for Tailscale subnet router access via connect-tailnet
   and disconnect-tailnet. Use when wiring tailnet connectivity after deploy-terraform,
   authoring those actions, or reviewing tailnet/terraform changes.
 ---
 
-# Tailnet hub↔spoke peering
+# Tailnet VPC peering
 
 ## When to read this skill
 

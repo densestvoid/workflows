@@ -202,7 +202,7 @@ jobs:
 
 **terminate-terraform** applies the app repo empty destroy module (`terraform-dir`), then removes the state file from S3 (`|| true`, same as budget). Module variables via `TF_VAR_*` env on the invoking step. Skip logic for empty state belongs in the caller workflow.
 
-For tailnet hub↔spoke peering after deploy, see [.cursor/skills/tailnet-hub-spoke/SKILL.md](.cursor/skills/tailnet-hub-spoke/SKILL.md).
+For tailnet VPC peering after deploy, see [.cursor/skills/tailnet-vpc-peering/SKILL.md](.cursor/skills/tailnet-vpc-peering/SKILL.md).
 
 ## Caching and skip logic
 
@@ -371,5 +371,5 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
     ├── dependabot-workflows/
     ├── go-toolchain-setup/
     ├── terraform-output-inline/
-    └── tailnet-hub-spoke/
+    └── tailnet-vpc-peering/
 ```

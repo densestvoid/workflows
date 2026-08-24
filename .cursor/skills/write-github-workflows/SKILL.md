@@ -17,7 +17,7 @@ description: >-
 | Dependabot config and PR review | [dependabot-workflows](dependabot-workflows/SKILL.md) |
 | Go jobs, go-checks, nested go.mod | [go-toolchain-setup](go-toolchain-setup/SKILL.md) |
 | Read Terraform output after deploy | [terraform-output-inline](terraform-output-inline/SKILL.md) |
-| Tailnet hub↔spoke peering | [tailnet-hub-spoke](tailnet-hub-spoke/SKILL.md) |
+| Tailnet VPC peering | [tailnet-vpc-peering](tailnet-vpc-peering/SKILL.md) |
 | Deploy/build actions, toolbox authoring | This skill |
 
 ## Version pins
