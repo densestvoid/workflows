@@ -32,8 +32,10 @@ Shared root at `.github/actions/tailnet/terraform/` — **not** nested under eit
 
 | Module | Cloud | Resources |
 |--------|-------|-----------|
-| `modules/aws-peering` | AWS | VPC peering, hub↔spoke routes |
-| `modules/digitalocean-peering` | DigitalOcean | `digitalocean_vpc_peering` |
+| `modules/aws-peering` | AWS | VPC peering, routes on all VPC route tables |
+| `modules/digitalocean-peering` | DigitalOcean | `digitalocean_vpc_peering` (routing implicit once peered) |
+
+On AWS, route tables are discovered automatically per VPC — there is no DigitalOcean equivalent; DO VPC peering handles private routing without per-table route resources.
 
 State key (derived inside actions): `tailnet/spokes/<deployment-id>.tfstate`
 
@@ -75,7 +77,7 @@ Read in the deploy job after **deploy-terraform** (see [terraform-output-inline]
     terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 ```
 
-Optional inputs: `cloud-provider` (`aws` | `digitalocean`, default `digitalocean`), `region` (default `nyc3`), comma-separated `hub-route-table-ids` / `spoke-route-table-ids` for AWS.
+Optional inputs: `cloud-provider` (`aws` | `digitalocean`, default `digitalocean`), `region` (default `nyc3`).
 
 ## Disconnect (PR close, before terminate)
 

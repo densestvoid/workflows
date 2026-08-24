@@ -7,8 +7,6 @@ data "aws_vpc" "hub" {
 }
 
 data "aws_route_tables" "hub" {
-  count = length(var.hub_route_table_ids) == 0 ? 1 : 0
-
   filter {
     name   = "vpc-id"
     values = [var.hub_vpc_id]
@@ -16,8 +14,6 @@ data "aws_route_tables" "hub" {
 }
 
 data "aws_route_tables" "spoke" {
-  count = length(var.spoke_route_table_ids) == 0 ? 1 : 0
-
   filter {
     name   = "vpc-id"
     values = [var.spoke_vpc_id]
@@ -25,9 +21,7 @@ data "aws_route_tables" "spoke" {
 }
 
 locals {
-  hub_route_table_ids = length(var.hub_route_table_ids) > 0 ? var.hub_route_table_ids : data.aws_route_tables.hub[0].ids
-  spoke_route_table_ids = length(var.spoke_route_table_ids) > 0 ? var.spoke_route_table_ids : data.aws_route_tables.spoke[0].ids
-  hub_cidr              = data.aws_vpc.hub.cidr_block
+  hub_cidr = data.aws_vpc.hub.cidr_block
 }
 
 resource "aws_vpc_peering_connection" "hub_spoke" {
@@ -41,7 +35,7 @@ resource "aws_vpc_peering_connection" "hub_spoke" {
 }
 
 resource "aws_route" "hub_to_spoke" {
-  for_each = toset(local.hub_route_table_ids)
+  for_each = toset(data.aws_route_tables.hub.ids)
 
   route_table_id            = each.value
   destination_cidr_block    = var.spoke_cidr
@@ -49,7 +43,7 @@ resource "aws_route" "hub_to_spoke" {
 }
 
 resource "aws_route" "spoke_to_hub" {
-  for_each = toset(local.spoke_route_table_ids)
+  for_each = toset(data.aws_route_tables.spoke.ids)
 
   route_table_id            = each.value
   destination_cidr_block    = local.hub_cidr

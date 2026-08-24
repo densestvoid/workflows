@@ -24,25 +24,13 @@ variable "spoke_vpc_id" {
 }
 
 variable "spoke_cidr" {
-  description = "Spoke VPC CIDR block (used for hub route tables on AWS)"
+  description = "Spoke VPC CIDR block (used for AWS hub route tables)"
   type        = string
 }
 
 variable "region" {
   description = "Cloud region (AWS region or DigitalOcean region slug)"
   type        = string
-}
-
-variable "hub_route_table_ids" {
-  description = "AWS hub route table IDs to route spoke CIDR via peering (empty = all route tables in hub VPC)"
-  type        = list(string)
-  default     = []
-}
-
-variable "spoke_route_table_ids" {
-  description = "AWS spoke route table IDs to route hub CIDR via peering (empty = all route tables in spoke VPC)"
-  type        = list(string)
-  default     = []
 }
 
 variable "do_token" {
