@@ -202,51 +202,7 @@ jobs:
 
 **terminate-terraform** applies the app repo empty destroy module (`terraform-dir`), then removes the state file from S3 (`|| true`, same as budget). Module variables via `TF_VAR_*` env on the invoking step. Skip logic for empty state belongs in the caller workflow.
 
-### Tailnet hub↔spoke peering
-
-Long-lived Tailscale subnet router lives in a **hub VPC**. After **deploy-terraform** creates a spoke VPC, **connect-tailnet** peers hub↔spoke so the router can reach private spoke IPs. Spokes never peer to each other.
-
-Terraform ships in `.github/actions/tailnet/terraform/` (shared by both actions — not nested under either action). Tailscale route advertisement stays on the manually bootstrapped router; these actions only manage cloud peering.
-
-App terraform should export spoke identifiers:
-
-```hcl
-output "vpc_id" { value = digitalocean_vpc.main.id }
-output "vpc_cidr" { value = digitalocean_vpc.main.ip_range }
-```
-
-After deploy (same job, after reading terraform outputs):
-
-```yaml
-- uses: densestvoid/workflows/.github/actions/connect-tailnet@main
-  if: steps.deploy.outcome == 'success'
-  with:
-    deployment-id: pr-${{ github.event.pull_request.number }}
-    hub-vpc-id: ${{ vars.TAILNET_HUB_VPC_ID }}
-    spoke-vpc-id: ${{ steps.vpc.outputs.id }}
-    spoke-cidr: ${{ steps.vpc.outputs.cidr }}
-    digitalocean-token: ${{ secrets.DO_TOKEN }}
-    terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
-    terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
-    terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
-```
-
-On PR close, run **disconnect-tailnet** with the same `deployment-id`, `hub-vpc-id`, and spoke values **before** **terminate-terraform**:
-
-```yaml
-- uses: densestvoid/workflows/.github/actions/disconnect-tailnet@main
-  with:
-    deployment-id: pr-${{ github.event.pull_request.number }}
-    hub-vpc-id: ${{ vars.TAILNET_HUB_VPC_ID }}
-    spoke-vpc-id: ${{ steps.vpc.outputs.id }}
-    spoke-cidr: ${{ steps.vpc.outputs.cidr }}
-    digitalocean-token: ${{ secrets.DO_TOKEN }}
-    terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
-    terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
-    terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
-```
-
-State key is derived inside the action: `tailnet/spokes/<deployment-id>.tfstate`. Set `cloud-provider` (`aws` or `digitalocean`) and `region` inputs when not using defaults (`digitalocean`, `nyc3`).
+For tailnet hub↔spoke peering after deploy, see [.cursor/skills/tailnet-hub-spoke/SKILL.md](.cursor/skills/tailnet-hub-spoke/SKILL.md).
 
 ## Caching and skip logic
 
@@ -414,5 +370,6 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
     ├── ci-playbooks/             # repo CI layout (ci.yml + alls-green)
     ├── dependabot-workflows/
     ├── go-toolchain-setup/
-    └── terraform-output-inline/
+    ├── terraform-output-inline/
+    └── tailnet-hub-spoke/
 ```
