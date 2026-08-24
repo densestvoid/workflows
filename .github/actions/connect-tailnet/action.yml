@@ -1,0 +1,122 @@
+name: 'Connect Tailnet'
+description: >-
+  Peer a deployed spoke VPC to the tailnet hub VPC using bundled Terraform in
+  ../tailnet/terraform. Pass the same repo secrets as deploy-terraform.
+inputs:
+  deployment-id:
+    description: 'Deployment identifier (e.g. pr-42, production)'
+    required: true
+  spoke-vpc-id:
+    description: 'Spoke VPC identifier from app terraform output'
+    required: true
+  spoke-cidr:
+    description: 'Spoke VPC CIDR from app terraform output'
+    required: true
+  hub-vpc-id:
+    description: 'Hub VPC identifier (subnet router home VPC)'
+    required: true
+  digitalocean-token:
+    description: 'DigitalOcean API token (TF_VAR_do_token)'
+    required: true
+  terraform-aws-access-key-id:
+    description: 'S3 backend access key ID and AWS provider credentials'
+    required: true
+  terraform-aws-secret-access-key:
+    description: 'S3 backend secret access key and AWS provider credentials'
+    required: true
+  terraform-aws-region:
+    description: 'S3 backend region and AWS provider region'
+    required: true
+  cloud-provider:
+    description: 'Cloud provider: aws or digitalocean'
+    required: false
+    default: 'digitalocean'
+  region:
+    description: 'Cloud region (AWS region or DigitalOcean region slug)'
+    required: false
+    default: 'nyc3'
+  hub-route-table-ids:
+    description: 'Optional comma-separated AWS hub route table IDs (default: all tables in hub VPC)'
+    required: false
+    default: ''
+  spoke-route-table-ids:
+    description: 'Optional comma-separated AWS spoke route table IDs (default: all tables in spoke VPC)'
+    required: false
+    default: ''
+  terraform-s3-bucket:
+    description: 'S3 state bucket'
+    required: false
+    default: 'densestvoid-terraform'
+runs:
+  using: 'composite'
+  steps:
+    - name: Prepare Terraform variables
+      shell: bash
+      env:
+        HUB_ROUTE_TABLE_IDS: ${{ inputs.hub-route-table-ids }}
+        SPOKE_ROUTE_TABLE_IDS: ${{ inputs.spoke-route-table-ids }}
+      run: |
+        set -euo pipefail
+
+        comma_to_json_list() {
+          local input="$1"
+          if [ -z "$input" ]; then
+            printf '[]'
+            return
+          fi
+          local IFS=,
+          local -a parts=()
+          read -ra parts <<< "$input"
+          local json='['
+          local first=1
+          for part in "${parts[@]}"; do
+            part="${part#"${part%%[![:space:]]*}"}"
+            part="${part%"${part##*[![:space:]]}"}"
+            if [ -n "$part" ]; then
+              if [ "$first" -eq 1 ]; then first=0; else json+=','; fi
+              json+="\"${part}\""
+            fi
+          done
+          json+=']'
+          printf '%s' "$json"
+        }
+
+        {
+          echo "TF_VAR_cloud_provider=${{ inputs.cloud-provider }}"
+          echo "TF_VAR_deployment_id=${{ inputs.deployment-id }}"
+          echo "TF_VAR_hub_vpc_id=${{ inputs.hub-vpc-id }}"
+          echo "TF_VAR_spoke_vpc_id=${{ inputs.spoke-vpc-id }}"
+          echo "TF_VAR_spoke_cidr=${{ inputs.spoke-cidr }}"
+          echo "TF_VAR_region=${{ inputs.region }}"
+          echo "TF_VAR_do_token=${{ inputs.digitalocean-token }}"
+          echo "TF_VAR_hub_route_table_ids=$(comma_to_json_list "$HUB_ROUTE_TABLE_IDS")"
+          echo "TF_VAR_spoke_route_table_ids=$(comma_to_json_list "$SPOKE_ROUTE_TABLE_IDS")"
+          echo "BACKEND_KEY=tailnet/spokes/${{ inputs.deployment-id }}.tfstate"
+          echo "AWS_ACCESS_KEY_ID=${{ inputs.terraform-aws-access-key-id }}"
+          echo "AWS_SECRET_ACCESS_KEY=${{ inputs.terraform-aws-secret-access-key }}"
+          echo "AWS_DEFAULT_REGION=${{ inputs.terraform-aws-region }}"
+        } >> "$GITHUB_ENV"
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_wrapper: false
+
+    - name: Terraform init
+      shell: bash
+      working-directory: ${{ github.action_path }}/../tailnet/terraform
+      run: |
+        set -euo pipefail
+        terraform init \
+          -backend-config="bucket=${{ inputs.terraform-s3-bucket }}" \
+          -backend-config="key=${BACKEND_KEY}" \
+          -backend-config="region=${{ inputs.terraform-aws-region }}" \
+          -backend-config="access_key=${{ inputs.terraform-aws-access-key-id }}" \
+          -backend-config="secret_key=${{ inputs.terraform-aws-secret-access-key }}"
+
+    - name: Terraform apply
+      shell: bash
+      working-directory: ${{ github.action_path }}/../tailnet/terraform
+      run: |
+        set -euo pipefail
+        terraform apply -auto-approve

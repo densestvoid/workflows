@@ -26,6 +26,8 @@ Pair with [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in the c
 | [build-docker](.github/actions/build-docker) | Build + push to GHCR; optional Docker Hub; skips when GHCR tag exists (`image-built`) |
 | [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`TF_VAR_*` env on the invoking step) |
 | [terminate-terraform](.github/actions/terminate-terraform) | Empty destroy module + S3 state delete (`terraform-dir`, `TF_VAR_*` env) |
+| [connect-tailnet](.github/actions/connect-tailnet) | Hub↔spoke VPC peering for tailnet subnet router (bundled Terraform) |
+| [disconnect-tailnet](.github/actions/disconnect-tailnet) | Destroy tailnet peering + S3 state delete |
 | [notify](.github/actions/notify) | Slack (inline JSON payload) + PR comment |
 | [install-go-tool](.github/actions/install-go-tool) | Install + cache a Go CLI tool (`~/go/bin/<tool>`) |
 | [actionlint](.github/actions/actionlint) | Download [rhysd/actionlint](https://github.com/rhysd/actionlint) and lint workflow files |
@@ -55,7 +57,7 @@ Secrets live in **each app repo** (repository secrets/variables, or GitHub Envir
 
 | Typical app secrets | Used by |
 |---------------------|---------|
-| `DO_TOKEN`, `TERRAFORM_AWS_*` | deploy/terminate terraform |
+| `DO_TOKEN`, `TERRAFORM_AWS_*` | deploy/terminate terraform, connect/disconnect tailnet |
 | `SLACK_WEBHOOK` | notify |
 | `DOCKERHUB_*` (optional) | build-docker |
 | `GITHUB_TOKEN` or PAT | build-docker (GHCR), notify (PR comments) |
@@ -200,6 +202,52 @@ jobs:
 
 **terminate-terraform** applies the app repo empty destroy module (`terraform-dir`), then removes the state file from S3 (`|| true`, same as budget). Module variables via `TF_VAR_*` env on the invoking step. Skip logic for empty state belongs in the caller workflow.
 
+### Tailnet hub↔spoke peering
+
+Long-lived Tailscale subnet router lives in a **hub VPC**. After **deploy-terraform** creates a spoke VPC, **connect-tailnet** peers hub↔spoke so the router can reach private spoke IPs. Spokes never peer to each other.
+
+Terraform ships in `.github/actions/tailnet/terraform/` (shared by both actions — not nested under either action). Tailscale route advertisement stays on the manually bootstrapped router; these actions only manage cloud peering.
+
+App terraform should export spoke identifiers:
+
+```hcl
+output "vpc_id" { value = digitalocean_vpc.main.id }
+output "vpc_cidr" { value = digitalocean_vpc.main.ip_range }
+```
+
+After deploy (same job, after reading terraform outputs):
+
+```yaml
+- uses: densestvoid/workflows/.github/actions/connect-tailnet@main
+  if: steps.deploy.outcome == 'success'
+  with:
+    deployment-id: pr-${{ github.event.pull_request.number }}
+    hub-vpc-id: ${{ vars.TAILNET_HUB_VPC_ID }}
+    spoke-vpc-id: ${{ steps.vpc.outputs.id }}
+    spoke-cidr: ${{ steps.vpc.outputs.cidr }}
+    digitalocean-token: ${{ secrets.DO_TOKEN }}
+    terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
+    terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
+    terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
+```
+
+On PR close, run **disconnect-tailnet** with the same `deployment-id`, `hub-vpc-id`, and spoke values **before** **terminate-terraform**:
+
+```yaml
+- uses: densestvoid/workflows/.github/actions/disconnect-tailnet@main
+  with:
+    deployment-id: pr-${{ github.event.pull_request.number }}
+    hub-vpc-id: ${{ vars.TAILNET_HUB_VPC_ID }}
+    spoke-vpc-id: ${{ steps.vpc.outputs.id }}
+    spoke-cidr: ${{ steps.vpc.outputs.cidr }}
+    digitalocean-token: ${{ secrets.DO_TOKEN }}
+    terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
+    terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
+    terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
+```
+
+State key is derived inside the action: `tailnet/spokes/<deployment-id>.tfstate`. Set `cloud-provider` (`aws` or `digitalocean`) and `region` inputs when not using defaults (`digitalocean`, `nyc3`).
+
 ## Caching and skip logic
 
 **Deploy skip gates** are caller-owned — use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in deploy workflow `if:` conditions, not workflow trigger `paths`. CI path filters live in each repo's **`ci.yml`** `changes` job (see CI section above).
@@ -240,6 +288,7 @@ Every action that needs source code checks out the full repo itself. Callers sho
 | Action | Checkout |
 |--------|----------|
 | build-go, build-docker, deploy-terraform, terminate-terraform, actionlint | Full repo |
+| connect-tailnet, disconnect-tailnet | None (bundled Terraform in action ref) |
 | notify | None (uses github-script; optional checkout in caller) |
 
 ### build-docker
@@ -353,6 +402,10 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
 │   ├── build-docker/
 │   ├── deploy-terraform/
 │   ├── terminate-terraform/
+│   ├── connect-tailnet/
+│   ├── disconnect-tailnet/
+│   ├── tailnet/
+│   │   └── terraform/           # shared hub↔spoke peering module
 │   └── notify/
 
 .cursor/

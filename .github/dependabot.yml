@@ -9,3 +9,12 @@ updates:
       github-actions:
         patterns:
           - "*"
+  - package-ecosystem: terraform
+    directory: "/.github/actions/tailnet/terraform"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      terraform-tailnet:
+        patterns:
+          - "*"

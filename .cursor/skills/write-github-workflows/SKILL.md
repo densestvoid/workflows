@@ -57,6 +57,7 @@ When authoring or editing workflow YAML, pin the **latest release tag** for ever
 | Internal same-repo refs | `$/.github/actions/...` | `./.github/actions/...` (workspace/caller checkout); `@main` self-references in this repo |
 | Slack + PR notify | **notify** | Duplicate slack + github-script |
 | Deploy / destroy | **deploy-terraform** / **terminate-terraform** | Inline init/apply/s3 rm |
+| Tailnet peering | **connect-tailnet** / **disconnect-tailnet** | Inline tailnet terraform |
 
 ## Toolbox actions (v1 pin in callers)
 
@@ -66,6 +67,8 @@ When authoring or editing workflow YAML, pin the **latest release tag** for ever
 | **build-docker** | GHCR push; optional Docker Hub; `image-built` when tag exists |
 | **deploy-terraform** | init + apply |
 | **terminate-terraform** | destroy module + S3 state delete |
+| **connect-tailnet** | hub↔spoke VPC peering (bundled terraform) |
+| **disconnect-tailnet** | destroy tailnet peering + S3 state delete |
 | **notify** | Slack + PR comment |
 | **install-go-tool** | Cached `go install` |
 | **actionlint** | Download rhysd/actionlint + lint workflows |
