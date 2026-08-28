@@ -13,11 +13,6 @@ variable "spoke_vpc_id" {
   type        = string
 }
 
-variable "spoke_cidr" {
-  description = "Spoke VPC CIDR (unified connect/disconnect API; not used by DO peering)"
-  type        = string
-}
-
 variable "do_token" {
   description = "DigitalOcean API token"
   type        = string

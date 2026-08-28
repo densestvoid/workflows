@@ -1,23 +1,15 @@
 name: 'Disconnect Tailnet'
 description: >-
-  Destroy hub↔spoke peering from bundled Terraform in ../tailnet/terraform/<cloud-provider>,
-  then delete the S3 state file. Run before terminate-terraform on PR close. Pass the
-  same inputs as connect-tailnet for the same deployment-id.
+  Destroy hub↔spoke peering using an empty Terraform root (same backend key as
+  connect-tailnet), then delete the S3 state file. Run before terminate-terraform
+  on PR close. Only deployment-id and credentials are required — resource IDs
+  are read from state.
 inputs:
   deployment-id:
     description: 'Deployment identifier used when connect-tailnet ran'
     required: true
-  hub-vpc-id:
-    description: 'Hub VPC identifier (same value passed to connect-tailnet)'
-    required: true
-  spoke-vpc-id:
-    description: 'Spoke VPC identifier (same value passed to connect-tailnet)'
-    required: true
-  spoke-cidr:
-    description: 'Spoke VPC CIDR (same value passed to connect-tailnet)'
-    required: true
   digitalocean-token:
-    description: 'DigitalOcean API token (TF_VAR_do_token); required when cloud-provider is digitalocean'
+    description: 'DigitalOcean API token; required when cloud-provider is digitalocean'
     required: false
     default: ''
   terraform-aws-access-key-id:
@@ -30,17 +22,9 @@ inputs:
     description: 'S3 backend region; AWS provider region when cloud-provider is aws'
     required: true
   cloud-provider:
-    description: 'Cloud provider: aws or digitalocean'
+    description: 'Cloud provider: aws or digitalocean (must match connect-tailnet)'
     required: false
     default: 'digitalocean'
-  region:
-    description: 'Cloud region (AWS region or DigitalOcean region slug)'
-    required: false
-    default: 'nyc3'
-  spoke-security-group-ids:
-    description: 'Optional comma-separated AWS spoke security group IDs (must match connect-tailnet; aws only)'
-    required: false
-    default: ''
   terraform-s3-bucket:
     description: 'S3 state bucket'
     required: false
@@ -53,56 +37,24 @@ runs:
       env:
         CLOUD_PROVIDER: ${{ inputs.cloud-provider }}
         DO_TOKEN: ${{ inputs.digitalocean-token }}
-        SPOKE_SECURITY_GROUP_IDS: ${{ inputs.spoke-security-group-ids }}
       run: |
         set -euo pipefail
+
+        case "$CLOUD_PROVIDER" in
+          aws|digitalocean) ;;
+          *)
+            echo "cloud-provider must be aws or digitalocean (got: $CLOUD_PROVIDER)" >&2
+            exit 1
+            ;;
+        esac
 
         if [ "$CLOUD_PROVIDER" = "digitalocean" ] && [ -z "$DO_TOKEN" ]; then
           echo "digitalocean-token is required when cloud-provider is digitalocean" >&2
           exit 1
         fi
 
-        comma_to_json_list() {
-          local input="$1"
-          if [ -z "$input" ]; then
-            printf '[]'
-            return
-          fi
-          local IFS=,
-          local -a parts=()
-          read -ra parts <<< "$input"
-          local json='['
-          local first=1
-          for part in "${parts[@]}"; do
-            part="${part#"${part%%[![:space:]]*}"}"
-            part="${part%"${part##*[![:space:]]}"}"
-            if [ -n "$part" ]; then
-              if [ "$first" -eq 1 ]; then first=0; else json+=','; fi
-              json+="\"${part}\""
-            fi
-          done
-          json+=']'
-          printf '%s' "$json"
-        }
-
-        {
-          echo "TF_VAR_deployment_id=${{ inputs.deployment-id }}"
-          echo "TF_VAR_hub_vpc_id=${{ inputs.hub-vpc-id }}"
-          echo "TF_VAR_spoke_vpc_id=${{ inputs.spoke-vpc-id }}"
-          echo "TF_VAR_spoke_cidr=${{ inputs.spoke-cidr }}"
-        } >> "$GITHUB_ENV"
-
-        if [ "$CLOUD_PROVIDER" = "aws" ]; then
-          {
-            echo "TF_VAR_region=${{ inputs.region }}"
-            echo "TF_VAR_spoke_security_group_ids=$(comma_to_json_list "$SPOKE_SECURITY_GROUP_IDS")"
-          } >> "$GITHUB_ENV"
-        fi
-
         if [ "$CLOUD_PROVIDER" = "digitalocean" ]; then
-          {
-            echo "TF_VAR_do_token=${DO_TOKEN}"
-          } >> "$GITHUB_ENV"
+          echo "TF_VAR_do_token=${DO_TOKEN}" >> "$GITHUB_ENV"
         fi
 
     - name: Setup Terraform
@@ -112,7 +64,7 @@ runs:
 
     - name: Terraform init
       shell: bash
-      working-directory: ${{ github.action_path }}/../tailnet/terraform/${{ inputs.cloud-provider }}
+      working-directory: ${{ github.action_path }}/../tailnet/terraform/${{ inputs.cloud-provider }}/destroy
       run: |
         set -euo pipefail
         terraform init \
@@ -122,27 +74,18 @@ runs:
           -backend-config="access_key=${{ inputs.terraform-aws-access-key-id }}" \
           -backend-config="secret_key=${{ inputs.terraform-aws-secret-access-key }}"
 
-    - name: Terraform destroy
-      if: inputs.cloud-provider == 'aws'
+    - name: Terraform apply
       shell: bash
-      working-directory: ${{ github.action_path }}/../tailnet/terraform/${{ inputs.cloud-provider }}
-      continue-on-error: true
-      env:
-        AWS_ACCESS_KEY_ID: ${{ inputs.terraform-aws-access-key-id }}
-        AWS_SECRET_ACCESS_KEY: ${{ inputs.terraform-aws-secret-access-key }}
-        AWS_DEFAULT_REGION: ${{ inputs.terraform-aws-region }}
-      run: |
-        set -euo pipefail
-        terraform destroy -auto-approve
-
-    - name: Terraform destroy
-      if: inputs.cloud-provider == 'digitalocean'
-      shell: bash
-      working-directory: ${{ github.action_path }}/../tailnet/terraform/${{ inputs.cloud-provider }}
+      working-directory: ${{ github.action_path }}/../tailnet/terraform/${{ inputs.cloud-provider }}/destroy
       continue-on-error: true
       run: |
         set -euo pipefail
-        terraform destroy -auto-approve
+        if [ "${{ inputs.cloud-provider }}" = "aws" ]; then
+          export AWS_ACCESS_KEY_ID="${{ inputs.terraform-aws-access-key-id }}"
+          export AWS_SECRET_ACCESS_KEY="${{ inputs.terraform-aws-secret-access-key }}"
+          export AWS_DEFAULT_REGION="${{ inputs.terraform-aws-region }}"
+        fi
+        terraform apply -auto-approve
 
     - name: Delete S3 state file
       shell: bash

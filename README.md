@@ -57,7 +57,7 @@ Secrets live in **each app repo** (repository secrets/variables, or GitHub Envir
 
 | Typical app secrets | Used by |
 |---------------------|---------|
-| `DO_TOKEN`, `TERRAFORM_AWS_*` | deploy/terminate terraform, connect/disconnect tailnet |
+| `DO_TOKEN`, `TERRAFORM_AWS_*` | deploy/terminate terraform; connect/disconnect tailnet (`DO_TOKEN` only when `cloud-provider: digitalocean`) |
 | `SLACK_WEBHOOK` | notify |
 | `DOCKERHUB_*` (optional) | build-docker |
 | `GITHUB_TOKEN` or PAT | build-docker (GHCR), notify (PR comments) |
@@ -363,7 +363,9 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
 │   ├── tailnet/
 │   │   └── terraform/
 │   │       ├── aws/
+│   │       │   └── destroy/     # disconnect-tailnet empty root
 │   │       └── digitalocean/
+│   │           └── destroy/     # disconnect-tailnet empty root
 │   └── notify/
 
 .cursor/

@@ -51,16 +51,15 @@ Tailnet path: client → hub router → one spoke. No hub-router OS firewall rul
 
 ```
 .github/actions/tailnet/terraform/
-  aws/           # provider aws only
-  digitalocean/  # provider digitalocean only
+  aws/              # connect: peering module
+  aws/destroy/      # disconnect: empty root (same state key)
+  digitalocean/
+  digitalocean/destroy/
 ```
 
 State key: `tailnet/spokes/<deployment-id>.tfstate`
 
-| Module | Resources |
-|--------|-----------|
-| `aws/modules/peering` | VPC peering, routes, optional SG ingress from hub CIDR |
-| `digitalocean/modules/peering` | `digitalocean_vpc_peering` |
+**disconnect-tailnet** applies the empty destroy root against the same state key (like **terminate-terraform**) — callers pass only `deployment-id` and credentials, not spoke resource IDs.
 
 ## Credentials
 
@@ -69,16 +68,25 @@ State key: `tailnet/spokes/<deployment-id>.tfstate`
 | `TERRAFORM_AWS_*` | Always (S3 state backend) |
 | `DO_TOKEN` → `digitalocean-token` | `cloud-provider: digitalocean` only |
 
+## Region input
+
+| `cloud-provider` | `region` input |
+|----------------|----------------|
+| `digitalocean` | Optional; defaults to `nyc3` when omitted |
+| `aws` | **Required** — use an AWS region (e.g. `us-east-1`), not a DO slug |
+
 ## App terraform outputs
 
 ```hcl
 output "vpc_id" { value = digitalocean_vpc.main.id }
-output "vpc_cidr" { value = digitalocean_vpc.main.ip_range }
-# AWS only, when using security groups:
+# AWS connect also needs:
+output "vpc_cidr" { value = aws_vpc.main.cidr_block }
 output "security_group_id" { value = aws_security_group.app.id }
 ```
 
 ## Connect (after deploy)
+
+**DigitalOcean:**
 
 ```yaml
 - uses: densestvoid/workflows/.github/actions/connect-tailnet@main
@@ -87,33 +95,42 @@ output "security_group_id" { value = aws_security_group.app.id }
     deployment-id: pr-${{ github.event.pull_request.number }}
     hub-vpc-id: ${{ vars.TAILNET_HUB_VPC_ID }}
     spoke-vpc-id: ${{ steps.vpc.outputs.id }}
-    spoke-cidr: ${{ steps.vpc.outputs.cidr }}
     cloud-provider: digitalocean
-    region: nyc3
     digitalocean-token: ${{ secrets.DO_TOKEN }}
     terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
     terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
     terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 ```
 
-**AWS only** — optional ingress from hub VPC CIDR on spoke security groups:
+**AWS** — also pass `spoke-cidr`, `region`, and optional `spoke-security-group-ids`:
 
 ```yaml
     cloud-provider: aws
     region: us-east-1
+    spoke-cidr: ${{ steps.vpc.outputs.cidr }}
     spoke-security-group-ids: ${{ steps.vpc.outputs.security-group-id }}
 ```
 
-Omit `digitalocean-token` when `cloud-provider` is `aws`.
-
-**DigitalOcean** — peering handles routing between VPCs. If spoke workloads use a DO Cloud Firewall, allow the hub VPC CIDR in app terraform (this action does not manage DO firewalls — importing a shared firewall into tailnet state would risk deleting it on disconnect).
+**DigitalOcean** — if spoke workloads use a DO Cloud Firewall, allow the hub VPC CIDR in app terraform (not managed here).
 
 ## Disconnect (PR close, before terminate)
 
-Pass the **same** values as connect for `deployment-id`, hub/spoke IDs, `spoke-cidr`, `cloud-provider`, and credentials.
+Only `deployment-id`, `cloud-provider`, and credentials — same `cloud-provider` as connect:
+
+```yaml
+- uses: densestvoid/workflows/.github/actions/disconnect-tailnet@main
+  with:
+    deployment-id: pr-${{ github.event.pull_request.number }}
+    cloud-provider: digitalocean
+    digitalocean-token: ${{ secrets.DO_TOKEN }}
+    terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
+    terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
+    terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
+```
 
 ## Anti-patterns
 
 - Peering spoke↔spoke directly
 - Running **terminate-terraform** before **disconnect-tailnet**
 - Expecting **connect-tailnet** to configure Tailscale on the router
+- Using `region: nyc3` with `cloud-provider: aws`
