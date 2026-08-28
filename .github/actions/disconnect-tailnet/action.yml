@@ -1,7 +1,8 @@
 name: 'Disconnect Tailnet'
 description: >-
-  Destroy hub↔spoke peering from bundled Terraform in ../tailnet/terraform, then
-  delete the S3 state file. Run before terminate-terraform on PR close.
+  Destroy hub↔spoke peering from bundled Terraform in ../tailnet/terraform/<cloud-provider>,
+  then delete the S3 state file. Run before terminate-terraform on PR close. Pass the
+  same inputs as connect-tailnet for the same deployment-id.
 inputs:
   deployment-id:
     description: 'Deployment identifier used when connect-tailnet ran'
@@ -16,16 +17,17 @@ inputs:
     description: 'Spoke VPC CIDR (same value passed to connect-tailnet)'
     required: true
   digitalocean-token:
-    description: 'DigitalOcean API token (TF_VAR_do_token)'
-    required: true
+    description: 'DigitalOcean API token (TF_VAR_do_token); required when cloud-provider is digitalocean'
+    required: false
+    default: ''
   terraform-aws-access-key-id:
-    description: 'S3 backend access key ID and AWS provider credentials'
+    description: 'S3 backend access key ID; AWS provider credentials when cloud-provider is aws'
     required: true
   terraform-aws-secret-access-key:
-    description: 'S3 backend secret access key and AWS provider credentials'
+    description: 'S3 backend secret access key; AWS provider credentials when cloud-provider is aws'
     required: true
   terraform-aws-region:
-    description: 'S3 backend region and AWS provider region'
+    description: 'S3 backend region; AWS provider region when cloud-provider is aws'
     required: true
   cloud-provider:
     description: 'Cloud provider: aws or digitalocean'
@@ -35,6 +37,10 @@ inputs:
     description: 'Cloud region (AWS region or DigitalOcean region slug)'
     required: false
     default: 'nyc3'
+  spoke-security-group-ids:
+    description: 'Optional comma-separated AWS spoke security group IDs (must match connect-tailnet; aws only)'
+    required: false
+    default: ''
   terraform-s3-bucket:
     description: 'S3 state bucket'
     required: false
@@ -44,17 +50,60 @@ runs:
   steps:
     - name: Prepare Terraform variables
       shell: bash
+      env:
+        CLOUD_PROVIDER: ${{ inputs.cloud-provider }}
+        DO_TOKEN: ${{ inputs.digitalocean-token }}
+        SPOKE_SECURITY_GROUP_IDS: ${{ inputs.spoke-security-group-ids }}
       run: |
         set -euo pipefail
+
+        if [ "$CLOUD_PROVIDER" = "digitalocean" ] && [ -z "$DO_TOKEN" ]; then
+          echo "digitalocean-token is required when cloud-provider is digitalocean" >&2
+          exit 1
+        fi
+
+        comma_to_json_list() {
+          local input="$1"
+          if [ -z "$input" ]; then
+            printf '[]'
+            return
+          fi
+          local IFS=,
+          local -a parts=()
+          read -ra parts <<< "$input"
+          local json='['
+          local first=1
+          for part in "${parts[@]}"; do
+            part="${part#"${part%%[![:space:]]*}"}"
+            part="${part%"${part##*[![:space:]]}"}"
+            if [ -n "$part" ]; then
+              if [ "$first" -eq 1 ]; then first=0; else json+=','; fi
+              json+="\"${part}\""
+            fi
+          done
+          json+=']'
+          printf '%s' "$json"
+        }
+
         {
-          echo "TF_VAR_cloud_provider=${{ inputs.cloud-provider }}"
           echo "TF_VAR_deployment_id=${{ inputs.deployment-id }}"
           echo "TF_VAR_hub_vpc_id=${{ inputs.hub-vpc-id }}"
           echo "TF_VAR_spoke_vpc_id=${{ inputs.spoke-vpc-id }}"
           echo "TF_VAR_spoke_cidr=${{ inputs.spoke-cidr }}"
-          echo "TF_VAR_region=${{ inputs.region }}"
-          echo "TF_VAR_do_token=${{ inputs.digitalocean-token }}"
         } >> "$GITHUB_ENV"
+
+        if [ "$CLOUD_PROVIDER" = "aws" ]; then
+          {
+            echo "TF_VAR_region=${{ inputs.region }}"
+            echo "TF_VAR_spoke_security_group_ids=$(comma_to_json_list "$SPOKE_SECURITY_GROUP_IDS")"
+          } >> "$GITHUB_ENV"
+        fi
+
+        if [ "$CLOUD_PROVIDER" = "digitalocean" ]; then
+          {
+            echo "TF_VAR_do_token=${DO_TOKEN}"
+          } >> "$GITHUB_ENV"
+        fi
 
     - name: Setup Terraform
       uses: hashicorp/setup-terraform@v4
@@ -63,7 +112,7 @@ runs:
 
     - name: Terraform init
       shell: bash
-      working-directory: ${{ github.action_path }}/../tailnet/terraform
+      working-directory: ${{ github.action_path }}/../tailnet/terraform/${{ inputs.cloud-provider }}
       run: |
         set -euo pipefail
         terraform init \
@@ -74,13 +123,23 @@ runs:
           -backend-config="secret_key=${{ inputs.terraform-aws-secret-access-key }}"
 
     - name: Terraform destroy
+      if: inputs.cloud-provider == 'aws'
       shell: bash
-      working-directory: ${{ github.action_path }}/../tailnet/terraform
+      working-directory: ${{ github.action_path }}/../tailnet/terraform/${{ inputs.cloud-provider }}
       continue-on-error: true
       env:
         AWS_ACCESS_KEY_ID: ${{ inputs.terraform-aws-access-key-id }}
         AWS_SECRET_ACCESS_KEY: ${{ inputs.terraform-aws-secret-access-key }}
         AWS_DEFAULT_REGION: ${{ inputs.terraform-aws-region }}
+      run: |
+        set -euo pipefail
+        terraform destroy -auto-approve
+
+    - name: Terraform destroy
+      if: inputs.cloud-provider == 'digitalocean'
+      shell: bash
+      working-directory: ${{ github.action_path }}/../tailnet/terraform/${{ inputs.cloud-provider }}
+      continue-on-error: true
       run: |
         set -euo pipefail
         terraform destroy -auto-approve

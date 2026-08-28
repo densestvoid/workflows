@@ -14,52 +14,69 @@ description: >-
 - On PR close, before **terminate-terraform**
 - Authoring or reviewing **connect-tailnet** / **disconnect-tailnet** or `.github/actions/tailnet/terraform`
 
-## Architecture
+## Prerequisites (subnet router — one-time)
 
-Long-lived Tailscale **subnet router** lives in a **hub VPC**. Each deployed spoke VPC peers **only** to the hub — spokes never peer to each other (cloud peering is non-transitive).
+Documented in full in **connect-tailnet** `description`. Summary:
 
+1. Subnet router in **hub VPC** with IP forwarding enabled
+2. `tailscale set --advertise-routes=10.200.0.0/16` (supernet; PR spokes use `/24` slices)
+3. Node tagged `tag:subnet-router`
+4. Tailnet ACL `autoApprovers`:
+
+```json
+"autoApprovers": {
+  "routes": {
+    "tag:subnet-router": ["10.200.0.0/16"]
+  }
+}
 ```
-Tailnet client → Tailscale tunnel → subnet router (hub VPC) → hub↔spoke peering → spoke resource
-```
 
-**connect-tailnet** / **disconnect-tailnet** manage cloud peering only. Tailscale route advertisement stays on the manually bootstrapped router (advertise a spoke supernet once, e.g. `10.200.0.0/16`, with ACL `autoApprovers` for `tag:subnet-router`).
+**connect-tailnet** creates cloud peering only — not Tailscale routes.
 
-Spoke isolation also needs hub-router `iptables`/`nftables` DROP forward rules between spoke CIDRs (one-time manual setup).
+## Spoke isolation (no iptables)
+
+Spoke↔spoke traffic is blocked by **topology**:
+
+- Only **hub↔spoke** peering is created; spoke↔spoke peering never exists
+- Cloud VPC peering is **non-transitive**
+
+Tailnet path: client → hub router → one spoke. No hub-router OS firewall rules required for this model.
+
+## Constraints
+
+- **Same region:** hub VPC and spoke VPC must be in the same cloud region
+- **PR/ephemeral spokes:** AWS module updates all route tables in each VPC — intended for small PR VPCs, not complex production hub layouts
 
 ## Terraform layout
 
-Shared root at `.github/actions/tailnet/terraform/` — **not** nested under either action:
+```
+.github/actions/tailnet/terraform/
+  aws/           # provider aws only
+  digitalocean/  # provider digitalocean only
+```
 
-| Module | Cloud | Resources |
-|--------|-------|-----------|
-| `modules/aws-peering` | AWS | VPC peering, routes on all VPC route tables |
-| `modules/digitalocean-peering` | DigitalOcean | `digitalocean_vpc_peering` (routing implicit once peered) |
+State key: `tailnet/spokes/<deployment-id>.tfstate`
 
-On AWS, route tables are discovered automatically per VPC — there is no DigitalOcean equivalent; DO VPC peering handles private routing without per-table route resources.
+| Module | Resources |
+|--------|-----------|
+| `aws/modules/peering` | VPC peering, routes, optional SG ingress from hub CIDR |
+| `digitalocean/modules/peering` | `digitalocean_vpc_peering` |
 
-State key (derived inside actions): `tailnet/spokes/<deployment-id>.tfstate`
+## Credentials
 
-## Repo secrets
-
-Same as **deploy-terraform** — wire explicitly per action step:
-
-| Secret | Input |
-|--------|-------|
-| `DO_TOKEN` | `digitalocean-token` |
-| `TERRAFORM_AWS_ACCESS_KEY_ID` | `terraform-aws-access-key-id` |
-| `TERRAFORM_AWS_SECRET_ACCESS_KEY` | `terraform-aws-secret-access-key` |
-| `TERRAFORM_AWS_REGION` | `terraform-aws-region` |
-
-Repo variable `TAILNET_HUB_VPC_ID` (or equivalent) for `hub-vpc-id`.
+| Secret | When required |
+|--------|----------------|
+| `TERRAFORM_AWS_*` | Always (S3 state backend) |
+| `DO_TOKEN` → `digitalocean-token` | `cloud-provider: digitalocean` only |
 
 ## App terraform outputs
 
 ```hcl
 output "vpc_id" { value = digitalocean_vpc.main.id }
 output "vpc_cidr" { value = digitalocean_vpc.main.ip_range }
+# AWS only, when using security groups:
+output "security_group_id" { value = aws_security_group.app.id }
 ```
-
-Read in the deploy job after **deploy-terraform** (see [terraform-output-inline](terraform-output-inline/SKILL.md)).
 
 ## Connect (after deploy)
 
@@ -71,43 +88,32 @@ Read in the deploy job after **deploy-terraform** (see [terraform-output-inline]
     hub-vpc-id: ${{ vars.TAILNET_HUB_VPC_ID }}
     spoke-vpc-id: ${{ steps.vpc.outputs.id }}
     spoke-cidr: ${{ steps.vpc.outputs.cidr }}
+    cloud-provider: digitalocean
+    region: nyc3
     digitalocean-token: ${{ secrets.DO_TOKEN }}
     terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
     terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
     terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 ```
 
-Optional inputs: `cloud-provider` (`aws` | `digitalocean`, default `digitalocean`), `region` (default `nyc3`).
+**AWS only** — optional ingress from hub VPC CIDR on spoke security groups:
+
+```yaml
+    cloud-provider: aws
+    region: us-east-1
+    spoke-security-group-ids: ${{ steps.vpc.outputs.security-group-id }}
+```
+
+Omit `digitalocean-token` when `cloud-provider` is `aws`.
+
+**DigitalOcean** — peering handles routing between VPCs. If spoke workloads use a DO Cloud Firewall, allow the hub VPC CIDR in app terraform (this action does not manage DO firewalls — importing a shared firewall into tailnet state would risk deleting it on disconnect).
 
 ## Disconnect (PR close, before terminate)
 
-Pass the **same** `deployment-id`, `hub-vpc-id`, and spoke values as connect — Terraform validates root variables on destroy.
-
-```yaml
-- uses: densestvoid/workflows/.github/actions/disconnect-tailnet@main
-  with:
-    deployment-id: pr-${{ github.event.pull_request.number }}
-    hub-vpc-id: ${{ vars.TAILNET_HUB_VPC_ID }}
-    spoke-vpc-id: ${{ steps.vpc.outputs.id }}
-    spoke-cidr: ${{ steps.vpc.outputs.cidr }}
-    digitalocean-token: ${{ secrets.DO_TOKEN }}
-    terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
-    terraform-aws-secret-access-key: ${{ secrets.TERRAFORM_AWS_SECRET_ACCESS_KEY }}
-    terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
-
-- uses: densestvoid/workflows/.github/actions/terminate-terraform@main
-  # ...
-```
-
-## Action behavior
-
-| Action | Checkout | Terraform op |
-|--------|----------|--------------|
-| **connect-tailnet** | None (bundled terraform in action ref) | `apply` |
-| **disconnect-tailnet** | None | `destroy` + S3 state delete |
+Pass the **same** values as connect for `deployment-id`, hub/spoke IDs, `spoke-cidr`, `cloud-provider`, and credentials.
 
 ## Anti-patterns
 
 - Peering spoke↔spoke directly
-- Running **terminate-terraform** before **disconnect-tailnet** (hub keeps routing to a dying spoke)
-- Expecting these actions to SSH to the subnet router or manage Tailscale ACLs (v1 scope is cloud peering only)
+- Running **terminate-terraform** before **disconnect-tailnet**
+- Expecting **connect-tailnet** to configure Tailscale on the router

@@ -361,7 +361,9 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
 │   ├── connect-tailnet/
 │   ├── disconnect-tailnet/
 │   ├── tailnet/
-│   │   └── terraform/           # shared hub↔spoke peering module
+│   │   └── terraform/
+│   │       ├── aws/
+│   │       └── digitalocean/
 │   └── notify/
 
 .cursor/
