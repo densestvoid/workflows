@@ -14,8 +14,3 @@ terraform {
 provider "digitalocean" {
   token = var.do_token
 }
-
-variable "do_token" {
-  type      = string
-  sensitive = true
-}
