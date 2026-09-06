@@ -45,15 +45,15 @@ Tailnet path: client → hub router → one spoke. No hub-router OS firewall rul
 ## Constraints
 
 - **Same region:** hub VPC and spoke VPC must be in the same cloud region
-- **PR/ephemeral spokes:** AWS module updates all route tables in each VPC — intended for small PR VPCs, not complex production hub layouts
+- **PR/ephemeral spokes:** AWS connect root updates all route tables in each VPC — intended for small PR VPCs, not complex production hub layouts
 
 ## Terraform layout
 
 ```
 .github/actions/tailnet/terraform/
-  aws/              # connect: peering module
+  aws/              # connect: VPC peering + routes (+ optional SG ingress)
   aws/destroy/      # disconnect: empty root (same state key)
-  digitalocean/
+  digitalocean/     # connect: VPC peering
   digitalocean/destroy/
 ```
 

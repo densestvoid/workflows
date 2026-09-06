@@ -2,12 +2,63 @@ provider "aws" {
   region = var.region
 }
 
-module "peering" {
-  source = "./modules/peering"
+locals {
+  peering_name = "tailnet-${var.deployment_id}"
+}
 
-  deployment_id            = var.deployment_id
-  hub_vpc_id               = var.hub_vpc_id
-  spoke_vpc_id             = var.spoke_vpc_id
-  spoke_cidr               = var.spoke_cidr
-  spoke_security_group_ids = var.spoke_security_group_ids
+data "aws_vpc" "hub" {
+  id = var.hub_vpc_id
+}
+
+data "aws_route_tables" "hub" {
+  filter {
+    name   = "vpc-id"
+    values = [var.hub_vpc_id]
+  }
+}
+
+data "aws_route_tables" "spoke" {
+  filter {
+    name   = "vpc-id"
+    values = [var.spoke_vpc_id]
+  }
+}
+
+locals {
+  hub_cidr = data.aws_vpc.hub.cidr_block
+}
+
+resource "aws_vpc_peering_connection" "hub_spoke" {
+  vpc_id      = var.hub_vpc_id
+  peer_vpc_id = var.spoke_vpc_id
+  auto_accept = true
+
+  tags = {
+    Name = local.peering_name
+  }
+}
+
+resource "aws_route" "hub_to_spoke" {
+  for_each = toset(data.aws_route_tables.hub.ids)
+
+  route_table_id            = each.value
+  destination_cidr_block    = var.spoke_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.hub_spoke.id
+}
+
+resource "aws_route" "spoke_to_hub" {
+  for_each = toset(data.aws_route_tables.spoke.ids)
+
+  route_table_id            = each.value
+  destination_cidr_block    = local.hub_cidr
+  vpc_peering_connection_id = aws_vpc_peering_connection.hub_spoke.id
+}
+
+resource "aws_vpc_security_group_ingress_rule" "hub_to_spoke" {
+  for_each = toset(var.spoke_security_group_ids)
+
+  security_group_id = each.value
+  cidr_ipv4         = local.hub_cidr
+  ip_protocol       = "-1"
+  description       = "Allow hub VPC traffic via tailnet subnet router (${local.peering_name})"
 }
