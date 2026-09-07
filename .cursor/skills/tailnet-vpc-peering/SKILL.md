@@ -102,7 +102,7 @@ output "security_group_id" { value = aws_security_group.app.id }
     terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 ```
 
-**AWS** — also pass `spoke-cidr`, `region`, and optional `spoke-security-group-ids`:
+**AWS** — also pass `spoke-cidr`, `region`, and `spoke-security-group-ids` (unless app terraform already allows inbound from the hub VPC CIDR):
 
 ```yaml
     cloud-provider: aws

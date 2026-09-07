@@ -53,7 +53,10 @@ inputs:
     required: false
     default: ''
   spoke-security-group-ids:
-    description: 'Optional comma-separated AWS spoke security group IDs (ingress from hub VPC CIDR; aws only)'
+    description: >-
+      Comma-separated AWS spoke security group IDs (aws only). Adds ingress from
+      hub VPC CIDR. Omit only if app terraform already allows hub traffic; peering
+      succeeds without this, but instances are usually unreachable without it.
     required: false
     default: ''
   terraform-s3-bucket:
