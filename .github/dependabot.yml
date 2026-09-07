@@ -9,3 +9,21 @@ updates:
       github-actions:
         patterns:
           - "*"
+  - package-ecosystem: terraform
+    directory: "/.github/actions/tailnet/terraform/aws"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      terraform-tailnet-aws:
+        patterns:
+          - "*"
+  - package-ecosystem: terraform
+    directory: "/.github/actions/tailnet/terraform/digitalocean"
+    schedule:
+      interval: weekly
+      day: monday
+    groups:
+      terraform-tailnet-digitalocean:
+        patterns:
+          - "*"

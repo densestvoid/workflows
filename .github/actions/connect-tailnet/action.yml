@@ -1,0 +1,144 @@
+name: 'Connect Tailnet'
+description: >-
+  Peer a deployed spoke VPC to the tailnet hub VPC (hub↔spoke only; spokes never
+  peer to each other). Bundled Terraform lives in ../tailnet/terraform/<cloud-provider>.
+
+  Prerequisite — one-time subnet router bootstrap (not done by this action):
+
+  1. Install Tailscale on the hub router; enable IP forwarding.
+  2. Advertise a spoke supernet: tailscale set --advertise-routes=10.200.0.0/16
+  3. Tag the node: tag:subnet-router
+  4. Tailnet ACL autoApprovers (example fragment):
+     "autoApprovers": { "routes": { "tag:subnet-router": ["10.200.0.0/16"] } }
+
+  Without steps 2–4, peering works but tailnet clients cannot reach spoke private IPs.
+
+  Secrets: TERRAFORM_AWS_* required (S3 state). digitalocean-token required when
+  cloud-provider is digitalocean. Hub and spoke must be in the same region.
+inputs:
+  deployment-id:
+    description: 'Deployment identifier (e.g. pr-42, production)'
+    required: true
+  spoke-vpc-id:
+    description: 'Spoke VPC identifier from app terraform output'
+    required: true
+  spoke-cidr:
+    description: 'Spoke VPC CIDR from app terraform output (required when cloud-provider is aws)'
+    required: false
+    default: ''
+  hub-vpc-id:
+    description: 'Hub VPC identifier (subnet router home VPC)'
+    required: true
+  digitalocean-token:
+    description: 'DigitalOcean API token (TF_VAR_do_token); required when cloud-provider is digitalocean'
+    required: false
+    default: ''
+  terraform-aws-access-key-id:
+    description: 'S3 backend access key ID; AWS provider credentials when cloud-provider is aws'
+    required: true
+  terraform-aws-secret-access-key:
+    description: 'S3 backend secret access key; AWS provider credentials when cloud-provider is aws'
+    required: true
+  terraform-aws-region:
+    description: 'S3 backend region; AWS provider region when cloud-provider is aws'
+    required: true
+  cloud-provider:
+    description: 'Cloud provider: aws or digitalocean'
+    required: false
+    default: 'digitalocean'
+  region:
+    description: >-
+      Cloud region. digitalocean: region slug (defaults to nyc3 when omitted).
+      aws: required — set an AWS region (e.g. us-east-1); do not use a DO slug.
+    required: false
+    default: ''
+  terraform-s3-bucket:
+    description: 'S3 state bucket'
+    required: false
+    default: 'densestvoid-terraform'
+runs:
+  using: 'composite'
+  steps:
+    - name: Prepare Terraform variables
+      shell: bash
+      env:
+        CLOUD_PROVIDER: ${{ inputs.cloud-provider }}
+        DO_TOKEN: ${{ inputs.digitalocean-token }}
+        SPOKE_CIDR: ${{ inputs.spoke-cidr }}
+        REGION_INPUT: ${{ inputs.region }}
+      run: |
+        set -euo pipefail
+
+        case "$CLOUD_PROVIDER" in
+          aws|digitalocean) ;;
+          *)
+            echo "cloud-provider must be aws or digitalocean (got: $CLOUD_PROVIDER)" >&2
+            exit 1
+            ;;
+        esac
+
+        if [ "$CLOUD_PROVIDER" = "digitalocean" ] && [ -z "$DO_TOKEN" ]; then
+          echo "digitalocean-token is required when cloud-provider is digitalocean" >&2
+          exit 1
+        fi
+
+        if [ "$CLOUD_PROVIDER" = "aws" ] && [ -z "$SPOKE_CIDR" ]; then
+          echo "spoke-cidr is required when cloud-provider is aws" >&2
+          exit 1
+        fi
+
+        if [ "$CLOUD_PROVIDER" = "aws" ]; then
+          if [ -z "$REGION_INPUT" ]; then
+            echo "region is required when cloud-provider is aws (e.g. us-east-1)" >&2
+            exit 1
+          fi
+          REGION="$REGION_INPUT"
+        else
+          REGION="${REGION_INPUT:-nyc3}"
+        fi
+
+        {
+          echo "TF_VAR_deployment_id=${{ inputs.deployment-id }}"
+          echo "TF_VAR_hub_vpc_id=${{ inputs.hub-vpc-id }}"
+          echo "TF_VAR_spoke_vpc_id=${{ inputs.spoke-vpc-id }}"
+        } >> "$GITHUB_ENV"
+
+        if [ "$CLOUD_PROVIDER" = "aws" ]; then
+          {
+            echo "TF_VAR_spoke_cidr=${SPOKE_CIDR}"
+            echo "TF_VAR_region=${REGION}"
+          } >> "$GITHUB_ENV"
+        fi
+
+        if [ "$CLOUD_PROVIDER" = "digitalocean" ]; then
+          echo "TF_VAR_do_token=${DO_TOKEN}" >> "$GITHUB_ENV"
+        fi
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_wrapper: false
+
+    - name: Terraform init
+      shell: bash
+      working-directory: ${{ github.action_path }}/../tailnet/terraform/${{ inputs.cloud-provider }}
+      run: |
+        set -euo pipefail
+        terraform init \
+          -backend-config="bucket=${{ inputs.terraform-s3-bucket }}" \
+          -backend-config="key=tailnet/spokes/${{ inputs.deployment-id }}.tfstate" \
+          -backend-config="region=${{ inputs.terraform-aws-region }}" \
+          -backend-config="access_key=${{ inputs.terraform-aws-access-key-id }}" \
+          -backend-config="secret_key=${{ inputs.terraform-aws-secret-access-key }}"
+
+    - name: Terraform apply
+      shell: bash
+      working-directory: ${{ github.action_path }}/../tailnet/terraform/${{ inputs.cloud-provider }}
+      run: |
+        set -euo pipefail
+        if [ "${{ inputs.cloud-provider }}" = "aws" ]; then
+          export AWS_ACCESS_KEY_ID="${{ inputs.terraform-aws-access-key-id }}"
+          export AWS_SECRET_ACCESS_KEY="${{ inputs.terraform-aws-secret-access-key }}"
+          export AWS_DEFAULT_REGION="${{ inputs.terraform-aws-region }}"
+        fi
+        terraform apply -auto-approve

@@ -1,0 +1,97 @@
+name: 'Disconnect Tailnet'
+description: >-
+  Destroy hub↔spoke peering using an empty Terraform root (same backend key as
+  connect-tailnet), then delete the S3 state file. Run before terminate-terraform
+  on PR close. Only deployment-id and credentials are required — resource IDs
+  are read from state.
+inputs:
+  deployment-id:
+    description: 'Deployment identifier used when connect-tailnet ran'
+    required: true
+  digitalocean-token:
+    description: 'DigitalOcean API token; required when cloud-provider is digitalocean'
+    required: false
+    default: ''
+  terraform-aws-access-key-id:
+    description: 'S3 backend access key ID; AWS provider credentials when cloud-provider is aws'
+    required: true
+  terraform-aws-secret-access-key:
+    description: 'S3 backend secret access key; AWS provider credentials when cloud-provider is aws'
+    required: true
+  terraform-aws-region:
+    description: 'S3 backend region; AWS provider region when cloud-provider is aws'
+    required: true
+  cloud-provider:
+    description: 'Cloud provider: aws or digitalocean (must match connect-tailnet)'
+    required: false
+    default: 'digitalocean'
+  terraform-s3-bucket:
+    description: 'S3 state bucket'
+    required: false
+    default: 'densestvoid-terraform'
+runs:
+  using: 'composite'
+  steps:
+    - name: Prepare Terraform variables
+      shell: bash
+      env:
+        CLOUD_PROVIDER: ${{ inputs.cloud-provider }}
+        DO_TOKEN: ${{ inputs.digitalocean-token }}
+      run: |
+        set -euo pipefail
+
+        case "$CLOUD_PROVIDER" in
+          aws|digitalocean) ;;
+          *)
+            echo "cloud-provider must be aws or digitalocean (got: $CLOUD_PROVIDER)" >&2
+            exit 1
+            ;;
+        esac
+
+        if [ "$CLOUD_PROVIDER" = "digitalocean" ] && [ -z "$DO_TOKEN" ]; then
+          echo "digitalocean-token is required when cloud-provider is digitalocean" >&2
+          exit 1
+        fi
+
+        if [ "$CLOUD_PROVIDER" = "digitalocean" ]; then
+          echo "TF_VAR_do_token=${DO_TOKEN}" >> "$GITHUB_ENV"
+        fi
+
+    - name: Setup Terraform
+      uses: hashicorp/setup-terraform@v4
+      with:
+        terraform_wrapper: false
+
+    - name: Terraform init
+      shell: bash
+      working-directory: ${{ github.action_path }}/../tailnet/terraform/${{ inputs.cloud-provider }}/destroy
+      run: |
+        set -euo pipefail
+        terraform init \
+          -backend-config="bucket=${{ inputs.terraform-s3-bucket }}" \
+          -backend-config="key=tailnet/spokes/${{ inputs.deployment-id }}.tfstate" \
+          -backend-config="region=${{ inputs.terraform-aws-region }}" \
+          -backend-config="access_key=${{ inputs.terraform-aws-access-key-id }}" \
+          -backend-config="secret_key=${{ inputs.terraform-aws-secret-access-key }}"
+
+    - name: Terraform apply
+      shell: bash
+      working-directory: ${{ github.action_path }}/../tailnet/terraform/${{ inputs.cloud-provider }}/destroy
+      continue-on-error: true
+      run: |
+        set -euo pipefail
+        if [ "${{ inputs.cloud-provider }}" = "aws" ]; then
+          export AWS_ACCESS_KEY_ID="${{ inputs.terraform-aws-access-key-id }}"
+          export AWS_SECRET_ACCESS_KEY="${{ inputs.terraform-aws-secret-access-key }}"
+          export AWS_DEFAULT_REGION="${{ inputs.terraform-aws-region }}"
+        fi
+        terraform apply -auto-approve
+
+    - name: Delete S3 state file
+      shell: bash
+      continue-on-error: true
+      env:
+        AWS_ACCESS_KEY_ID: ${{ inputs.terraform-aws-access-key-id }}
+        AWS_SECRET_ACCESS_KEY: ${{ inputs.terraform-aws-secret-access-key }}
+        AWS_DEFAULT_REGION: ${{ inputs.terraform-aws-region }}
+      run: aws s3 rm "s3://${{ inputs.terraform-s3-bucket }}/tailnet/spokes/${{ inputs.deployment-id }}.tfstate"

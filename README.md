@@ -26,6 +26,8 @@ Pair with [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in the c
 | [build-docker](.github/actions/build-docker) | Build + push to GHCR; optional Docker Hub; skips when GHCR tag exists (`image-built`) |
 | [deploy-terraform](.github/actions/deploy-terraform) | Terraform init + apply (`TF_VAR_*` env on the invoking step) |
 | [terminate-terraform](.github/actions/terminate-terraform) | Empty destroy module + S3 state delete (`terraform-dir`, `TF_VAR_*` env) |
+| [connect-tailnet](.github/actions/connect-tailnet) | Hub↔spoke VPC peering for tailnet subnet router (bundled Terraform) |
+| [disconnect-tailnet](.github/actions/disconnect-tailnet) | Destroy tailnet peering + S3 state delete |
 | [notify](.github/actions/notify) | Slack (inline JSON payload) + PR comment |
 | [install-go-tool](.github/actions/install-go-tool) | Install + cache a Go CLI tool (`~/go/bin/<tool>`) |
 | [actionlint](.github/actions/actionlint) | Download [rhysd/actionlint](https://github.com/rhysd/actionlint) and lint workflow files |
@@ -55,7 +57,7 @@ Secrets live in **each app repo** (repository secrets/variables, or GitHub Envir
 
 | Typical app secrets | Used by |
 |---------------------|---------|
-| `DO_TOKEN`, `TERRAFORM_AWS_*` | deploy/terminate terraform |
+| `DO_TOKEN`, `TERRAFORM_AWS_*` | deploy/terminate terraform; connect/disconnect tailnet (`DO_TOKEN` only when `cloud-provider: digitalocean`) |
 | `SLACK_WEBHOOK` | notify |
 | `DOCKERHUB_*` (optional) | build-docker |
 | `GITHUB_TOKEN` or PAT | build-docker (GHCR), notify (PR comments) |
@@ -200,6 +202,8 @@ jobs:
 
 **terminate-terraform** applies the app repo empty destroy module (`terraform-dir`), then removes the state file from S3 (`|| true`, same as budget). Module variables via `TF_VAR_*` env on the invoking step. Skip logic for empty state belongs in the caller workflow.
 
+For tailnet VPC peering after deploy, see [.cursor/skills/tailnet-vpc-peering/SKILL.md](.cursor/skills/tailnet-vpc-peering/SKILL.md).
+
 ## Caching and skip logic
 
 **Deploy skip gates** are caller-owned — use [`dorny/paths-filter`](https://github.com/dorny/paths-filter) in deploy workflow `if:` conditions, not workflow trigger `paths`. CI path filters live in each repo's **`ci.yml`** `changes` job (see CI section above).
@@ -240,6 +244,7 @@ Every action that needs source code checks out the full repo itself. Callers sho
 | Action | Checkout |
 |--------|----------|
 | build-go, build-docker, deploy-terraform, terminate-terraform, actionlint | Full repo |
+| connect-tailnet, disconnect-tailnet | None (bundled Terraform in action ref) |
 | notify | None (uses github-script; optional checkout in caller) |
 
 ### build-docker
@@ -353,6 +358,14 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
 │   ├── build-docker/
 │   ├── deploy-terraform/
 │   ├── terminate-terraform/
+│   ├── connect-tailnet/
+│   ├── disconnect-tailnet/
+│   ├── tailnet/
+│   │   └── terraform/
+│   │       ├── aws/
+│   │       │   └── destroy/     # disconnect-tailnet empty root
+│   │       └── digitalocean/
+│   │           └── destroy/     # disconnect-tailnet empty root
 │   └── notify/
 
 .cursor/
@@ -361,5 +374,6 @@ Read outputs in the **same job**, immediately after **deploy-terraform** succeed
     ├── ci-playbooks/             # repo CI layout (ci.yml + alls-green)
     ├── dependabot-workflows/
     ├── go-toolchain-setup/
-    └── terraform-output-inline/
+    ├── terraform-output-inline/
+    └── tailnet-vpc-peering/
 ```
