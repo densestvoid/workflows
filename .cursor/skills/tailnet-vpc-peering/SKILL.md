@@ -31,7 +31,18 @@ Documented in full in **connect-tailnet** `description`. Summary:
 }
 ```
 
-**connect-tailnet** creates cloud peering only — not Tailscale routes.
+**connect-tailnet** creates cloud peering and firewall rules for hub reachability — not Tailscale routes.
+
+## Spoke firewall requirement
+
+Tailnet access needs both **routing** (peering) and **firewall allow** (hub VPC CIDR).
+
+| Cloud | App terraform must provide | connect-tailnet configures |
+|-------|---------------------------|----------------------------|
+| AWS | Security groups on spoke instances | SG ingress from hub VPC CIDR |
+| DigitalOcean | A Cloud Firewall on spoke droplets | Companion firewall on same droplets/tags |
+
+DigitalOcean has no standalone firewall-rule resource (unlike AWS `aws_vpc_security_group_ingress_rule`). connect-tailnet creates a **second** firewall (`tailnet-<deployment-id>`) scoped to the same droplets/tags as the app firewall. DO unions allow rules across firewalls; disconnect destroys only the tailnet firewall.
 
 ## Spoke isolation (no iptables)
 
@@ -46,14 +57,15 @@ Tailnet path: client → hub router → one spoke. No hub-router OS firewall rul
 
 - **Same region:** hub VPC and spoke VPC must be in the same cloud region
 - **PR/ephemeral spokes:** AWS connect root updates all route tables in each VPC — intended for small PR VPCs, not complex production hub layouts
+- **Per-deployment firewalls:** use a dedicated spoke Cloud Firewall per deployment (not a shared production firewall)
 
 ## Terraform layout
 
 ```
 .github/actions/tailnet/terraform/
-  aws/              # connect: VPC peering + routes (+ optional SG ingress)
+  aws/              # connect: VPC peering + routes + SG ingress
   aws/destroy/      # disconnect: empty root (same state key)
-  digitalocean/     # connect: VPC peering
+  digitalocean/     # connect: VPC peering + tailnet hub firewall
   digitalocean/destroy/
 ```
 
@@ -79,9 +91,21 @@ State key: `tailnet/spokes/<deployment-id>.tfstate`
 
 ```hcl
 output "vpc_id" { value = digitalocean_vpc.main.id }
+output "firewall_id" { value = digitalocean_firewall.app.id }
+
 # AWS connect also needs:
 output "vpc_cidr" { value = aws_vpc.main.cidr_block }
 output "security_group_id" { value = aws_security_group.app.id }
+```
+
+Example DO app firewall (connect-tailnet adds hub access separately):
+
+```hcl
+resource "digitalocean_firewall" "app" {
+  name = "pr-${var.pr_number}"
+  tags = [digitalocean_tag.app.id]
+  # app-specific inbound/outbound rules only
+}
 ```
 
 ## Connect (after deploy)
@@ -95,6 +119,7 @@ output "security_group_id" { value = aws_security_group.app.id }
     deployment-id: pr-${{ github.event.pull_request.number }}
     hub-vpc-id: ${{ vars.TAILNET_HUB_VPC_ID }}
     spoke-vpc-id: ${{ steps.vpc.outputs.id }}
+    spoke-firewall-id: ${{ steps.vpc.outputs.firewall-id }}
     cloud-provider: digitalocean
     digitalocean-token: ${{ secrets.DO_TOKEN }}
     terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
@@ -102,7 +127,7 @@ output "security_group_id" { value = aws_security_group.app.id }
     terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 ```
 
-**AWS** — also pass `spoke-cidr`, `region`, and `spoke-security-group-ids` (unless app terraform already allows inbound from the hub VPC CIDR):
+**AWS:**
 
 ```yaml
     cloud-provider: aws
@@ -110,8 +135,6 @@ output "security_group_id" { value = aws_security_group.app.id }
     spoke-cidr: ${{ steps.vpc.outputs.cidr }}
     spoke-security-group-ids: ${{ steps.vpc.outputs.security-group-id }}
 ```
-
-**DigitalOcean** — if spoke workloads use a DO Cloud Firewall, allow the hub VPC CIDR in app terraform (not managed here).
 
 ## Disconnect (PR close, before terminate)
 
@@ -134,3 +157,4 @@ Only `deployment-id`, `cloud-provider`, and credentials — same `cloud-provider
 - Running **terminate-terraform** before **disconnect-tailnet**
 - Expecting **connect-tailnet** to configure Tailscale on the router
 - Using `region: nyc3` with `cloud-provider: aws`
+- Sharing one production Cloud Firewall across PR spokes (disconnect removes the tailnet companion firewall for that deployment only; shared app firewalls are fine if per-deployment)

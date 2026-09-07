@@ -24,10 +24,6 @@ variable "region" {
 }
 
 variable "spoke_security_group_ids" {
-  description = >-
-    Spoke security group IDs to allow inbound from the hub VPC CIDR. Omit only if
-    app terraform already allows that traffic; peering and routes apply without
-    this, but default SGs typically block hub-originated packets.
+  description = "Spoke security group IDs; connect-tailnet adds inbound from hub VPC CIDR"
   type        = list(string)
-  default     = []
 }

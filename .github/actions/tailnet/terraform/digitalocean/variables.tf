@@ -13,6 +13,11 @@ variable "spoke_vpc_id" {
   type        = string
 }
 
+variable "spoke_firewall_id" {
+  description = "Spoke Cloud Firewall ID from app terraform; tailnet adds a companion firewall on the same droplets/tags"
+  type        = string
+}
+
 variable "do_token" {
   description = "DigitalOcean API token"
   type        = string
