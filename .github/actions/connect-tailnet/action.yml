@@ -15,10 +15,6 @@ description: >-
 
   Secrets: TERRAFORM_AWS_* required (S3 state). digitalocean-token required when
   cloud-provider is digitalocean. Hub and spoke must be in the same region.
-
-  Firewall: AWS requires spoke-security-group-ids. DigitalOcean requires a spoke
-  Cloud Firewall in app terraform (spoke-firewall-id) so connect-tailnet can add
-  hub VPC ingress on the same droplets/tags.
 inputs:
   deployment-id:
     description: 'Deployment identifier (e.g. pr-42, production)'
@@ -58,13 +54,8 @@ inputs:
     default: ''
   spoke-security-group-ids:
     description: >-
-      Comma-separated AWS spoke security group IDs (required when cloud-provider
-      is aws). Adds ingress from hub VPC CIDR.
-  spoke-firewall-id:
-    description: >-
-      Spoke Cloud Firewall ID from app terraform (required when cloud-provider
-      is digitalocean). connect-tailnet adds a companion firewall allowing hub
-      VPC traffic on the same droplets/tags.
+      Comma-separated AWS spoke security group IDs (aws only). Adds ingress from
+      hub VPC CIDR. Omit only if app terraform already allows hub traffic.
     required: false
     default: ''
   terraform-s3-bucket:
@@ -82,7 +73,6 @@ runs:
         SPOKE_CIDR: ${{ inputs.spoke-cidr }}
         REGION_INPUT: ${{ inputs.region }}
         SPOKE_SECURITY_GROUP_IDS: ${{ inputs.spoke-security-group-ids }}
-        SPOKE_FIREWALL_ID: ${{ inputs.spoke-firewall-id }}
       run: |
         set -euo pipefail
 
@@ -101,16 +91,6 @@ runs:
 
         if [ "$CLOUD_PROVIDER" = "aws" ] && [ -z "$SPOKE_CIDR" ]; then
           echo "spoke-cidr is required when cloud-provider is aws" >&2
-          exit 1
-        fi
-
-        if [ "$CLOUD_PROVIDER" = "aws" ] && [ -z "$SPOKE_SECURITY_GROUP_IDS" ]; then
-          echo "spoke-security-group-ids is required when cloud-provider is aws" >&2
-          exit 1
-        fi
-
-        if [ "$CLOUD_PROVIDER" = "digitalocean" ] && [ -z "$SPOKE_FIREWALL_ID" ]; then
-          echo "spoke-firewall-id is required when cloud-provider is digitalocean" >&2
           exit 1
         fi
 
@@ -162,10 +142,7 @@ runs:
         fi
 
         if [ "$CLOUD_PROVIDER" = "digitalocean" ]; then
-          {
-            echo "TF_VAR_do_token=${DO_TOKEN}"
-            echo "TF_VAR_spoke_firewall_id=${SPOKE_FIREWALL_ID}"
-          } >> "$GITHUB_ENV"
+          echo "TF_VAR_do_token=${DO_TOKEN}" >> "$GITHUB_ENV"
         fi
 
     - name: Setup Terraform

@@ -31,18 +31,18 @@ Documented in full in **connect-tailnet** `description`. Summary:
 }
 ```
 
-**connect-tailnet** creates cloud peering and firewall rules for hub reachability — not Tailscale routes.
+**connect-tailnet** creates cloud peering only — not Tailscale routes.
 
-## Spoke firewall requirement
+## Reachability beyond peering
 
-Tailnet access needs both **routing** (peering) and **firewall allow** (hub VPC CIDR).
+Peering provides routing only. Callers must allow hub-originated traffic in app terraform when needed:
 
-| Cloud | App terraform must provide | connect-tailnet configures |
-|-------|---------------------------|----------------------------|
-| AWS | Security groups on spoke instances | SG ingress from hub VPC CIDR |
-| DigitalOcean | A Cloud Firewall on spoke droplets | Companion firewall on same droplets/tags |
+| Cloud | Typical control | connect-tailnet (AWS only) |
+|-------|----------------|---------------------------|
+| AWS | Security groups on instances | Optional `spoke-security-group-ids` adds hub VPC CIDR ingress |
+| DigitalOcean | Droplet Cloud Firewalls, DB trusted sources, App Platform ingress | Peering only — no firewall management |
 
-DigitalOcean has no standalone firewall-rule resource (unlike AWS `aws_vpc_security_group_ingress_rule`). connect-tailnet creates a **second** firewall (`tailnet-<deployment-id>`) scoped to the same droplets/tags as the app firewall. DO unions allow rules across firewalls; disconnect destroys only the tailnet firewall.
+DigitalOcean Cloud Firewalls attach to Droplets only (not App Platform or managed databases). App Platform + VPC database setups use DB **trusted sources** and app ingress controls separately.
 
 ## Spoke isolation (no iptables)
 
@@ -57,15 +57,14 @@ Tailnet path: client → hub router → one spoke. No hub-router OS firewall rul
 
 - **Same region:** hub VPC and spoke VPC must be in the same cloud region
 - **PR/ephemeral spokes:** AWS connect root updates all route tables in each VPC — intended for small PR VPCs, not complex production hub layouts
-- **Per-deployment firewalls:** use a dedicated spoke Cloud Firewall per deployment (not a shared production firewall)
 
 ## Terraform layout
 
 ```
 .github/actions/tailnet/terraform/
-  aws/              # connect: VPC peering + routes + SG ingress
+  aws/              # connect: VPC peering + routes (+ optional SG ingress)
   aws/destroy/      # disconnect: empty root (same state key)
-  digitalocean/     # connect: VPC peering + tailnet hub firewall
+  digitalocean/     # connect: VPC peering
   digitalocean/destroy/
 ```
 
@@ -91,21 +90,10 @@ State key: `tailnet/spokes/<deployment-id>.tfstate`
 
 ```hcl
 output "vpc_id" { value = digitalocean_vpc.main.id }
-output "firewall_id" { value = digitalocean_firewall.app.id }
 
 # AWS connect also needs:
 output "vpc_cidr" { value = aws_vpc.main.cidr_block }
 output "security_group_id" { value = aws_security_group.app.id }
-```
-
-Example DO app firewall (connect-tailnet adds hub access separately):
-
-```hcl
-resource "digitalocean_firewall" "app" {
-  name = "pr-${var.pr_number}"
-  tags = [digitalocean_tag.app.id]
-  # app-specific inbound/outbound rules only
-}
 ```
 
 ## Connect (after deploy)
@@ -119,7 +107,6 @@ resource "digitalocean_firewall" "app" {
     deployment-id: pr-${{ github.event.pull_request.number }}
     hub-vpc-id: ${{ vars.TAILNET_HUB_VPC_ID }}
     spoke-vpc-id: ${{ steps.vpc.outputs.id }}
-    spoke-firewall-id: ${{ steps.vpc.outputs.firewall-id }}
     cloud-provider: digitalocean
     digitalocean-token: ${{ secrets.DO_TOKEN }}
     terraform-aws-access-key-id: ${{ secrets.TERRAFORM_AWS_ACCESS_KEY_ID }}
@@ -127,7 +114,7 @@ resource "digitalocean_firewall" "app" {
     terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 ```
 
-**AWS:**
+**AWS** — also pass `spoke-cidr`, `region`, and `spoke-security-group-ids` unless app terraform already allows inbound from the hub VPC CIDR:
 
 ```yaml
     cloud-provider: aws
@@ -157,4 +144,3 @@ Only `deployment-id`, `cloud-provider`, and credentials — same `cloud-provider
 - Running **terminate-terraform** before **disconnect-tailnet**
 - Expecting **connect-tailnet** to configure Tailscale on the router
 - Using `region: nyc3` with `cloud-provider: aws`
-- Sharing one spoke Cloud Firewall across multiple deployments (use one per PR/deployment)
