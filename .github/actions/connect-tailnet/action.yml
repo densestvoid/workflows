@@ -52,12 +52,6 @@ inputs:
       aws: required — set an AWS region (e.g. us-east-1); do not use a DO slug.
     required: false
     default: ''
-  spoke-security-group-ids:
-    description: >-
-      Comma-separated AWS spoke security group IDs (aws only). Adds ingress from
-      hub VPC CIDR. Omit only if app terraform already allows hub traffic.
-    required: false
-    default: ''
   terraform-s3-bucket:
     description: 'S3 state bucket'
     required: false
@@ -72,7 +66,6 @@ runs:
         DO_TOKEN: ${{ inputs.digitalocean-token }}
         SPOKE_CIDR: ${{ inputs.spoke-cidr }}
         REGION_INPUT: ${{ inputs.region }}
-        SPOKE_SECURITY_GROUP_IDS: ${{ inputs.spoke-security-group-ids }}
       run: |
         set -euo pipefail
 
@@ -104,29 +97,6 @@ runs:
           REGION="${REGION_INPUT:-nyc3}"
         fi
 
-        comma_to_json_list() {
-          local input="$1"
-          if [ -z "$input" ]; then
-            printf '[]'
-            return
-          fi
-          local IFS=,
-          local -a parts=()
-          read -ra parts <<< "$input"
-          local json='['
-          local first=1
-          for part in "${parts[@]}"; do
-            part="${part#"${part%%[![:space:]]*}"}"
-            part="${part%"${part##*[![:space:]]}"}"
-            if [ -n "$part" ]; then
-              if [ "$first" -eq 1 ]; then first=0; else json+=','; fi
-              json+="\"${part}\""
-            fi
-          done
-          json+=']'
-          printf '%s' "$json"
-        }
-
         {
           echo "TF_VAR_deployment_id=${{ inputs.deployment-id }}"
           echo "TF_VAR_hub_vpc_id=${{ inputs.hub-vpc-id }}"
@@ -137,7 +107,6 @@ runs:
           {
             echo "TF_VAR_spoke_cidr=${SPOKE_CIDR}"
             echo "TF_VAR_region=${REGION}"
-            echo "TF_VAR_spoke_security_group_ids=$(comma_to_json_list "$SPOKE_SECURITY_GROUP_IDS")"
           } >> "$GITHUB_ENV"
         fi
 

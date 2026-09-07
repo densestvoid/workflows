@@ -45,12 +45,3 @@ resource "aws_route" "spoke_to_hub" {
   destination_cidr_block    = data.aws_vpc.hub.cidr_block
   vpc_peering_connection_id = aws_vpc_peering_connection.hub_spoke.id
 }
-
-resource "aws_vpc_security_group_ingress_rule" "hub_to_spoke" {
-  for_each = toset(var.spoke_security_group_ids)
-
-  security_group_id = each.value
-  cidr_ipv4         = data.aws_vpc.hub.cidr_block
-  ip_protocol       = "-1"
-  description       = "Allow hub VPC traffic via tailnet subnet router (tailnet-${var.deployment_id})"
-}

@@ -22,12 +22,3 @@ variable "region" {
   description = "AWS region"
   type        = string
 }
-
-variable "spoke_security_group_ids" {
-  description = >-
-    Spoke security group IDs to allow inbound from the hub VPC CIDR. Omit only if
-    app terraform already allows that traffic; peering applies without this, but
-    default SGs typically block hub-originated packets.
-  type        = list(string)
-  default     = []
-}

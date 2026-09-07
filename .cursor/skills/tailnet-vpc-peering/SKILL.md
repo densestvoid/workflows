@@ -31,38 +31,28 @@ Documented in full in **connect-tailnet** `description`. Summary:
 }
 ```
 
-**connect-tailnet** creates cloud peering only — not Tailscale routes.
+**connect-tailnet** creates cloud VPC peering only — not Tailscale routes, firewalls, or security groups.
 
-## Reachability beyond peering
-
-Peering provides routing only. Callers must allow hub-originated traffic in app terraform when needed:
-
-| Cloud | Typical control | connect-tailnet (AWS only) |
-|-------|----------------|---------------------------|
-| AWS | Security groups on instances | Optional `spoke-security-group-ids` adds hub VPC CIDR ingress |
-| DigitalOcean | Droplet Cloud Firewalls, DB trusted sources, App Platform ingress | Peering only — no firewall management |
-
-DigitalOcean Cloud Firewalls attach to Droplets only (not App Platform or managed databases). App Platform + VPC database setups use DB **trusted sources** and app ingress controls separately.
-
-## Spoke isolation (no iptables)
+## Spoke isolation
 
 Spoke↔spoke traffic is blocked by **topology**:
 
 - Only **hub↔spoke** peering is created; spoke↔spoke peering never exists
 - Cloud VPC peering is **non-transitive**
 
-Tailnet path: client → hub router → one spoke. No hub-router OS firewall rules required for this model.
+Tailnet path: client → hub router → one spoke.
 
 ## Constraints
 
 - **Same region:** hub VPC and spoke VPC must be in the same cloud region
 - **PR/ephemeral spokes:** AWS connect root updates all route tables in each VPC — intended for small PR VPCs, not complex production hub layouts
+- **Reachability:** peering provides routing only; security groups, Cloud Firewalls, and DB trusted sources stay in app terraform
 
 ## Terraform layout
 
 ```
 .github/actions/tailnet/terraform/
-  aws/              # connect: VPC peering + routes (+ optional SG ingress)
+  aws/              # connect: VPC peering + routes
   aws/destroy/      # disconnect: empty root (same state key)
   digitalocean/     # connect: VPC peering
   digitalocean/destroy/
@@ -93,7 +83,6 @@ output "vpc_id" { value = digitalocean_vpc.main.id }
 
 # AWS connect also needs:
 output "vpc_cidr" { value = aws_vpc.main.cidr_block }
-output "security_group_id" { value = aws_security_group.app.id }
 ```
 
 ## Connect (after deploy)
@@ -114,13 +103,12 @@ output "security_group_id" { value = aws_security_group.app.id }
     terraform-aws-region: ${{ secrets.TERRAFORM_AWS_REGION }}
 ```
 
-**AWS** — also pass `spoke-cidr`, `region`, and `spoke-security-group-ids` unless app terraform already allows inbound from the hub VPC CIDR:
+**AWS** — also pass `spoke-cidr` and `region`:
 
 ```yaml
     cloud-provider: aws
     region: us-east-1
     spoke-cidr: ${{ steps.vpc.outputs.cidr }}
-    spoke-security-group-ids: ${{ steps.vpc.outputs.security-group-id }}
 ```
 
 ## Disconnect (PR close, before terminate)
