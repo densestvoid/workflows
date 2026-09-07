@@ -157,4 +157,4 @@ Only `deployment-id`, `cloud-provider`, and credentials — same `cloud-provider
 - Running **terminate-terraform** before **disconnect-tailnet**
 - Expecting **connect-tailnet** to configure Tailscale on the router
 - Using `region: nyc3` with `cloud-provider: aws`
-- Sharing one production Cloud Firewall across PR spokes (disconnect removes the tailnet companion firewall for that deployment only; shared app firewalls are fine if per-deployment)
+- Sharing one spoke Cloud Firewall across multiple deployments (use one per PR/deployment)
